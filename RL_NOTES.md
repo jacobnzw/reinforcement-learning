@@ -30,7 +30,7 @@ $$
   G_t = \sum_{k=t+1}^T \gamma^{k-1-t} r_k
 $$
 
-where $ \gamma \in [0, 1] $, $T$ is the terminal time step for episodic tasks. For continuing tasks, $T=\infty$, in which case the sum would diverge if $\gamma = 1$, thus we require $ \gamma < 1 $ to ensure convergence.
+where $ \gamma \in [0, 1] $, $T$ is the terminal time step for episodic tasks. For continuing tasks, $T=\infty$, in which case the sum would diverge if $\gamma = 1$, thus we require $\gamma < 1$ to ensure convergence.
 
 
 **Trajectory**
@@ -39,7 +39,7 @@ $$
     \tau = (s_0, a_0, r_0, s_1, a_1, r_1, s_2, \dots)
 $$
 
-In state $s_t$ we take action $a_t$, receive reward $r_t$ and end up in state $s_{t+1}$. Sometimes the reward index is aligned with the state index, sometimes it's not, in which case it means that the reward comes after the action and at the time of transition to the next state $s_{t+1}$. So then the trajectory would be $ \tau = (\dots, s_t, a_t, r_{t+1}, \dots) $. Both conventions are used.
+In state $s_t$ we take action $a_t$, receive reward $r_t$ and end up in state $s_{t+1}$. Sometimes the reward index is aligned with the state index, sometimes it's not, in which case it means that the reward comes after the action and at the time of transition to the next state $s_{t+1}$. So then the trajectory would be $\tau = (\dots, s_t, a_t, r_{t+1}, \dots)$. Both conventions are used.
 
 
 **World model** 
@@ -86,7 +86,7 @@ $$
     Q_\pi(s, a) = \mathbb{E}_{\pi} [G_{t} | s_t = s, a_t = a]
 $$
 
-*Hint: The policy $\pi$ determines the rewards $r_t$, because it determines the actions which determine next states and rewards (cf. trajectory definition), these then determine the expected return $G_t$, per the definition above. In conclusion, $ \pi $ determines $ G_t$*.
+*Hint: The policy $\pi$ determines the rewards $r_t$, because it determines the actions which determine next states and rewards (cf. trajectory definition), these then determine the expected return $G_t$, per the definition above. In conclusion, $\pi$ determines $G_t$*.
 
 
 
@@ -95,7 +95,7 @@ $$
 
 These are **model-free methods** as they don't require the world model. They are also **value-based methods** because they depend on action-value function.
 
-The arrow $ \to $ indicates the update direction, "moving towards the target value". The right-hand side is the **target** value. The shorthand arrow notation merely foregrounds the essential nature of the update, and should not be interpreted as implying equality or prescribing how to update $ Q(s, a) $.
+The arrow $ \to $ indicates the update direction, "moving towards the target value". The right-hand side is the **target** value. The shorthand arrow notation merely foregrounds the essential nature of the update, and should not be interpreted as implying equality or prescribing how to update $Q(s, a)$.
 
 *Hint: Think of these updates as operating point-wise: the notation $ Q(s, a) $ refers to a single point on the surface of the $Q$ function, rather then a mathematical object of type function.*
 
@@ -118,21 +118,21 @@ $$
   Q(s_t, a_t) = Q(s_t, a_t) + \alpha[G_t - Q(s_t, a_t)]
 $$
 
-where $ \alpha $ is the learning rate and $ G_t $ is the target (cf. target network in Q-learning). So we're just adding a corrective term to the old value $ Q(s_t, a_t) $, where the corrective term is just a $\alpha$-scaled departure of the old $ Q(s_t, a_t) $ from the target $ G_t $.
+where $\alpha$ is the learning rate and $G_t$ is the target (cf. target network in Q-learning). So we're just adding a corrective term to the old value $Q(s_t, a_t)$, where the corrective term is just a $\alpha$-scaled departure of the old $Q(s_t, a_t)$ from the target $G_t$.
 
 The updates for the SARSA, expected SARSA and Q-learning above are analogous.
 
 
 #### Temporal Difference Learning
-The problem with Monte Carlo method is that we have to wait until the episode terminates, the trajectory is complete and the sum for $ G_t $ can be evaluated. 
+The problem with Monte Carlo method is that we have to wait until the episode terminates, the trajectory is complete and the sum for $G_t$ can be evaluated. 
 
-Now suppose we approximate the return $ G_t \approx r_{t+1} + \gamma Q(s_{t+1}, a_{t+1}) $, we plug back into the Monte Carlo update and get
+Now suppose we approximate the return $G_t \approx r_{t+1} + \gamma Q(s_{t+1}, a_{t+1})$, we plug back into the Monte Carlo update and get
 
 $$
   Q(s_t, a_t) = Q(s_t, a_t) + \alpha[r_{t+1} + \gamma Q(s_{t+1}, a_{t+1}) - Q(s_t, a_t)].
 $$
 
-Same iteration, just with a different target $ r_{t+1} + \gamma Q(s_{t+1}, a_{t+1}) $. It's called *temporal difference* learning, because the temporal difference is $ \gamma Q(s_{t+1}, a_{t+1}) - Q(s_t, a_t) $.
+Same iteration, just with a different target $r_{t+1} + \gamma Q(s_{t+1}, a_{t+1}) $. It's called *temporal difference* learning, because the temporal difference is $\gamma Q(s_{t+1}, a_{t+1}) - Q(s_t, a_t)$.
 
 *Hint: Best to imagine this in discrete state and discrete action space, then Q is a 2D array (table). In that case, remember that $ Q(s_{t+1}, a_{t+1}) $ is just an element in a table representing the current estimate of the expected return at coordinates $ (s_{t+1}, a_{t+1}) $. Initially this estimate could be set to zero (cf. notes in [Bellman optimality equation](#bellman-optimality-equation)).*
 
@@ -141,10 +141,10 @@ Same iteration, just with a different target $ r_{t+1} + \gamma Q(s_{t+1}, a_{t+
 Once $Q^*$ is known, the optimal policy is trivially recovered by local argmax
 
 $$
-  a^* = \pi^*(s) = \arg\max_a Q^*(s, a)
+  a^{*} = \pi^{*}(s) = \arg\max_a Q^{*}(s, a)
 $$
 
-where $s$ is some *fixed* state before the $\argmax$ takes place. (Otherwise, we would be dealing with a variational optimization problem, where the result of $ \arg\max_a $ would be a function of $s$.)
+where $s$ is some *fixed* state before the $\arg\max$ takes place. (Otherwise, we would be dealing with a variational optimization problem, where the result of $ \arg\max_a $ would be a function of $s$.)
 The policy algorithm, that is the way of recovering an optimal action $a^*$ given a state $s_0$, can be stated in two steps:
  1. In the two-argument function $Q^*(s, a)$, fix $s$ to some value $s_0$, which results in a one-argument function $Q^*(s_0, a)$.
  2. Take argmax over actions in the one-argument function: $a^* = \arg\max_a Q^*(s_0, a)$
@@ -164,24 +164,24 @@ $$
   Q(s_t, a_t) = Q(s_t, a_t) + \alpha[r_{t+1} + \gamma Q(s_{t+1}, a_{t+1}) - Q(s_t, a_t)],
 $$
 
-where $ a_{t+1} \sim \pi(a | s_{t+1}) $, that is the next action is sampled *from the policy $ \pi $* (derived from $ Q $ by $\epsilon$-greedy policy rule) - the same policy that chose the action $ a_t $. 
+where $a_{t+1} \sim \pi(a | s_{t+1})$, that is the next action is sampled *from the policy $\pi$* (derived from $Q$ by $\epsilon$-greedy policy rule) - the same policy that chose the action $a_t$. 
 In other words, the **behavior policy** that chose the action $ a_{t+1} $ during update is the same as the **target policy** that chose action $ a_t $ and that is being improved.
 This is why SARSA is *on-policy*.
 
-If we were to replace the term $ Q(s_{t+1}, a_{t+1}) $ with $ \max_a Q(s_{t+1}, a) $, we get the Q-learning update.
+If we were to replace the term $Q(s_{t+1}, a_{t+1})$ with $\max_a Q(s_{t+1}, a)$, we get the Q-learning update.
 
 $$
   Q(s_t, a_t) = Q(s_t, a_t) + \alpha[r_{t+1} + \gamma \max_a Q(s_{t+1}, a) - Q(s_t, a_t)],
 $$
 
-where the next action is effectively $ a_{t+1} = \argmax Q(s_{t+1}, a) $ which is a greedy policy, which is different from the main target $ \epsilon $-greedy policy used to complete the task. Therefore, Q-learning is an *off-policy* method.
+where the next action is effectively $a_{t+1} = \arg\max Q(s_{t+1}, a)$ which is a greedy policy, which is different from the main target $\epsilon$-greedy policy used to complete the task. Therefore, Q-learning is an *off-policy* method.
 
 SARSA (and its variants) is on-policy, because the behavior policy, the policy used to gather experiences, is the same as the target policy (the one that's being improved/evaluated). Q-Learning (and its variants) is off-policy, because the behavior policy is different from the target policy. The off-policy methods are more sample efficient.
 
-**Sample Efficiency** is number of episodes/time steps that it takes to get good at a task. Less samples $ \implies $ higher efficiency. Monte Carlo is least sample efficient. The SARSA, expected SARSA and Q-Learning are increasingly more sample efficient, because they take advantage of temporal differences.
+**Sample Efficiency** is number of episodes/time steps that it takes to get good at a task. Less samples $\implies$ higher efficiency. Monte Carlo is least sample efficient. The SARSA, expected SARSA and Q-Learning are increasingly more sample efficient, because they take advantage of temporal differences.
 
 **Generalized Policy Iteration**
-Interdependece between policy $\pi$ and action-value function $ Q_\pi $. We can see this in greedy policy rule to derive $ \pi $ from $ Q $ and in Bellman optimality equation to derive $ Q $ from $ \pi $.
+Interdependece between policy $\pi$ and action-value function $Q_\pi$. We can see this in greedy policy rule to derive $\pi$ from $ Q $ and in Bellman optimality equation to derive $Q$ from $\pi$.
 
 
 ### Bellman Optimality Equation
@@ -189,14 +189,14 @@ for the state-value function
 
 $$
 \begin{align*}
-  V^*(s) 
-  &= \mathbb{E}_\pi[r + \gamma V^*(s')] \\
+  V^{*}(s) 
+  &= \mathbb{E}_\pi[r + \gamma V^{*}(s')] \\
 \end{align*}
 $$
 
 >But what's the point of that if I have to do the same thing for $V(s_{t+1})$, why is this even such a big deal of equation if it just kicks the can down the road (shift evaluation from $V(s_t)$ to $V(s_{t+1})$)?
 
-The key insight: it’s a *recursive consistency condition*. The Bellman equation doesn’t just define $ V_\pi $; it gives a local *self-consistency constraint* that $V_\pi$  must satisfy for every state $ s $. That means if you can find a function $ V $ that satisfies
+The key insight: it’s a *recursive consistency condition*. The Bellman equation doesn’t just define $V_\pi$; it gives a local *self-consistency constraint* that $V_\pi$  must satisfy for every state $s$. That means if you can find a function $V$ that satisfies
 
 $$
   V(s) = \mathbb{E_{\pi}}[r + \gamma V(s')]
@@ -281,42 +281,42 @@ We don't necessarily wanna evaluate it, we just need to define it so we can deri
 
 
 #### The difference between policy-based and policy-gradient methods
-Policy-gradient methods, what we’re going to study in this unit, is a subclass of policy-based methods. In policy-based methods, the optimization is most of the time on-policy since for each update, we only use data (trajectories) collected by our most recent version of $ \pi_\theta $ .
+Policy-gradient methods, what we’re going to study in this unit, is a subclass of policy-based methods. In policy-based methods, the optimization is most of the time on-policy since for each update, we only use data (trajectories) collected by our most recent version of $\pi_\theta$ .
 
-The difference between these two methods lies on how we optimize the parameter $ \theta $:
-  - In policy-based methods, we search directly for the optimal policy. We can optimize the parameter $ \theta $ indirectly by maximizing the local approximation of the objective function with techniques like hill climbing, simulated annealing, or evolution strategies.
-  - In policy-gradient methods, because it is a subclass of the policy-based methods, we search directly for the optimal policy. But we optimize the parameter $ \theta $ directly by performing the gradient ascent on the performance of the objective function $ J(\theta) $.
+The difference between these two methods lies on how we optimize the parameter $\theta$:
+  - In policy-based methods, we search directly for the optimal policy. We can optimize the parameter $\theta$ indirectly by maximizing the local approximation of the objective function with techniques like hill climbing, simulated annealing, or evolution strategies.
+  - In policy-gradient methods, because it is a subclass of the policy-based methods, we search directly for the optimal policy. But we optimize the parameter $\theta$ directly by performing the gradient ascent on the performance of the objective function $J(\theta)$.
 
 
 #### Training Loop
-- Collect an episode with policy $ \pi_\theta $
-- Calculate the objective function $ J(\pi_\theta) $ (return = sum of rewards)
-- Compute the gradient of the objective function $ \nabla_\theta J(\pi_\theta) $
-- Update the weights of the policy network $ \theta \leftarrow \theta + \alpha \nabla_\theta J(\pi_\theta) $ 
+- Collect an episode with policy $\pi_\theta$
+- Calculate the objective function $J(\pi_\theta)$ (return = sum of rewards)
+- Compute the gradient of the objective function $\nabla_\theta J(\pi_\theta)$
+- Update the weights of the policy network $\theta \leftarrow \theta + \alpha \nabla_\theta J(\pi_\theta)$ 
   - (If positive/negative return: increase/decrease probability of each (state, action) pairs in the episode trajectory)
 
 
 #### Policy Gradient Theorem
-Gradient of $J(\theta)$ with respect to $ \theta $ is hard to compute because:
+Gradient of $J(\theta)$ with respect to $\theta$ is hard to compute because:
   - $J(\theta)$ is an expectation over the trajectory distribution, which is intractable to evaluate
   - We might not have access to the world model, in which case we can only evaluate the expectation empirically (by sampling trajectories)
 
 Policy gradient theorem provides a way to estimate the gradient of $J(\theta)$ using only the data collected by the policy itself. 
-For any differentiable policy $ \pi_\theta $ and for any policy objective function $ J(\pi_\theta) $, the policy gradient theorem states that
+For any differentiable policy $\pi_\theta$ and for any policy objective function $J(\pi_\theta)$, the policy gradient theorem states that
 
 $$
   \nabla_\theta J(\pi_\theta) = \mathbb{E}_{\tau\sim\pi_\theta} \left[\sum_t \nabla_\theta \log \pi_\theta (a_t | s_t) \Psi_t \right].
 $$
 
 The expectation is over all the trajectories (state-action) pairs that the agent might encounter.
-The term $ \nabla_\theta \log \pi_\theta (a_t | s_t) $ is the **policy gradient**, which is effectively gradient of log-likelihood of taking action $a_t$ in state $s_t$ under policy $ \pi_\theta $.
+The term $\nabla_\theta \log \pi_\theta (a_t | s_t)$ is the **policy gradient**, which is effectively gradient of log-likelihood of taking action $a_t$ in state $s_t$ under policy $\pi_\theta$.
 
-The term $ \Psi_t $ is the **advantage function**, which is the difference between the expected return and the value function.
+The term $\Psi_t$ is the **advantage function**, which is the difference between the expected return and the value function.
 > How good is the action a_t?
 
-There are several choices for the advantage function. If we set $ \Psi_t = G_t $ (total return that occured after taking action $a_t$), we get the **Monte Carlo** policy gradient, which has high variance, because it suffers from the problem of different states having higher or lower returns on average. If we set $ \Psi_t = G_t - V_\pi(s_t) $, thus using the value function as a baseline to normalize the returns, we get the **REINFORCE** algorithm. 
+There are several choices for the advantage function. If we set $\Psi_t = G_t$ (total return that occured after taking action $a_t$), we get the **Monte Carlo** policy gradient, which has high variance, because it suffers from the problem of different states having higher or lower returns on average. If we set $\Psi_t = G_t - V_\pi(s_t)$, thus using the value function as a baseline to normalize the returns, we get the **REINFORCE** algorithm. 
 
-A problem with computing the return $G_t$, is that we need to wait until the end of the episode, which is inefficient. We can use bootstrapping to estimate the return more efficiently. If we set $ \Psi_t = r_t + \gamma V_\pi(s_{t+1}) - V_\pi(s_t) $, we get the **actor-critic** method.
+A problem with computing the return $G_t$, is that we need to wait until the end of the episode, which is inefficient. We can use bootstrapping to estimate the return more efficiently. If we set $\Psi_t = r_t + \gamma V_\pi(s_{t+1}) - V_\pi(s_t)$, we get the **actor-critic** method.
 
 
 
