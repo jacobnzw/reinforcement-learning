@@ -1,0 +1,22 @@
+[project]
+name = "reinforcement-learning"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "gymnasium>=1.1.1",
+    "pygame==2.5.2",
+    "gym-games @ git+https://github.com/qlan3/gym-games.git",
+    "ple @ git+https://github.com/ntasfi/PyGame-Learning-Environment.git",
+    "huggingface-hub>=0.35.3",
+    "imageio[ffmpeg]>=2.35.1",
+    "torch>=2.0.0,<2.5.0",
+    "pyglet==1.5.1",
+    "pyvirtualdisplay>=3.0",
+]
+
+[tool.uv.workspace]
+members = [
+    "unit-5",
+]
