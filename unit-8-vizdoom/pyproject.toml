@@ -1,0 +1,11 @@
+[project]
+dependencies = [
+    "faster-fifo==1.5.2",
+    "vizdoom",
+    "sample-factory",
+    "typer",
+    "torch>=2.0.0,<2.6.0", # Pin to older version for compatibility
+]
+name = "unit-8-vizdoom"
+version = "0.1.0"
+requires-python = ">=3.12"
