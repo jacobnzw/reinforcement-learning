@@ -399,6 +399,8 @@ Used in Kober, Peters, Learning Motor Primitives for Robotics, where robot learn
 
 
 #### Frame Stacking
+#### Frame Skipping
+
 
 
 #### Evaluation 
