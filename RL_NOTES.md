@@ -405,3 +405,12 @@ Used in Kober, Peters, Learning Motor Primitives for Robotics, where robot learn
 
 #### Evaluation 
 Because most algorithms use exploration noise during training, you need a separate test environment to evaluate the performance of your agent at a given time. It is recommended to periodically evaluate your agent for n test episodes (n is usually between 5 and 20) and average the reward per episode to have a good estimate.
+
+
+# References
+
+[Open AI Spining Up](https://spinningup.openai.com/en/latest/) Best for grasping the terminology, basic concepts and intuitions. For example, has best explained definition of the quality function Q and what it means to "... thereafter follow policy $\pi$", which I had trouble with initially.
+
+[Yandex Practical RL](https://github.com/yandexdataschool/Practical_RL/tree/master) Didn't do it, but looks like it covers more advanced and cutting-endge topics. Is more self-led, requires more initiative and dedication (eg. reading a chapter in Sutton's book).
+
+[HuggingFace Deep RL Course](https://huggingface.co/learn/deep-rl-course/unit0/introduction) Low-maintainance, notebooks outdated with old dependencies, had to continously struggle with finding the right versions of libraries that work together.
