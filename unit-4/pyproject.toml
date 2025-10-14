@@ -1,5 +1,5 @@
 [project]
-name = "reinforcement-learning"
+name = "unit-4"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -14,9 +14,4 @@ dependencies = [
     "torch>=2.0.0,<2.5.0",
     "pyglet==1.5.1",
     "pyvirtualdisplay>=3.0",
-]
-
-[tool.uv.workspace]
-members = [
-    "unit-5",
 ]
