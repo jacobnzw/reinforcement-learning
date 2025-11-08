@@ -1,0 +1,11 @@
+[project]
+name = "flappybird"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "flappy-bird-gymnasium>=0.4.0",
+    "huggingface-sb3>=3.0",
+    "opencv-python>=4.8.1.78",
+    "stable-baselines3>=2.7.0",
+    "torch>=2.9.0",
+]
