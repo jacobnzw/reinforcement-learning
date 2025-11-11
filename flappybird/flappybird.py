@@ -1,3 +1,4 @@
+import os
 from collections import deque
 
 import flappy_bird_gymnasium  # noqa: F401
@@ -7,11 +8,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from gymnasium.wrappers import FrameStack
 from torch.distributions import Categorical
 
+# from huggingface_hub import login
+# from huggingface_sb3 import package_to_hub
+from utils import push_to_hub, record_video  # noqa: F401
+
 device = torch.accelerator.current_accelerator()
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class FlappyBirdImagePolicy(nn.Module):
@@ -86,66 +89,99 @@ class FlappyBirdStatePolicy(nn.Module):
       - player's rotation
     """
 
-    INPUT_HW = (84, 84)  # (800, 576)
-
-    def __init__(self, frame_stack, action_dim):
-        super(FlappyBirdImagePolicy, self).__init__()
-
-        self.conv_stack = nn.Sequential(
-            nn.Conv2d(3 * frame_stack, 32, kernel_size=8, stride=4),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Flatten(),
-        )
-
-        # Figure out the state dimensionality given sample input
-        with torch.no_grad():
-            state_dim = self.conv_stack(
-                torch.zeros(1, 3 * frame_stack, *self.INPUT_HW)
-            ).numel()
-        hidden_dim = 512
+    def __init__(self, state_dim=12, hidden_dim=64, action_dim=2):
+        super(FlappyBirdStatePolicy, self).__init__()
 
         self.fc_stack = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, action_dim),
             nn.Softmax(dim=1),
         )
 
     def forward(self, x):
-        return self.fc_stack(self.conv_stack(x))
+        return self.fc_stack(x)
 
-    def act(self, state):
-        """Select an action from the state."""
+    def act(self, state, deterministic=False):
+        """Select an action given the state."""
 
-        print(f"state.ptp(): {state.ptp()}")
-
-        state = state.transpose(0, 3, 1, 2).reshape(-1, state.shape[1], state.shape[2])
         state = torch.from_numpy(state).float().unsqueeze(0).to(device)
-        # interpolate expects (B, C, H, W)
-        state = F.interpolate(state, size=self.INPUT_HW, mode="nearest")
-
-        probs = self.forward(state).cpu()
+        probs = self.forward(state)
 
         # convert probs to a categorical distribution and sample the action from it
         dist = Categorical(probs)
-        action = dist.sample()
+        action = dist.sample() if not deterministic else dist.probs.argmax()
         # return the action and its log probability under categorical distribution
         return action.item(), dist.log_prob(action)
 
 
-# TODO: class FlappyBirdStatePolicy(nn.Module)
+def compute_returns(rewards, gamma):
+    """Compute the returns from the rewards."""
+    returns = deque(maxlen=len(rewards))
+    discounted_return = 0
+    for r in reversed(rewards):
+        discounted_return = r + gamma * discounted_return
+        # Using deque to prepend in O(1) to keep the returns in chronological order.
+        returns.appendleft(discounted_return)
+    return returns
 
 
-def reinforce(
-    policy, optimizer, env, n_training_episodes, max_t, gamma, print_every=100
+def reinforce_episode(policy, env, max_t, gamma, entropy_coef: float | None = None):
+    log_probs = []
+    rewards = []
+    state, _ = env.reset()  # TODO: seed?
+
+    # Collect trajectory: run the whole episode
+    for t in range(max_t):  # could be handled via gymnasium.wrappers.TimeLimit
+        action, log_prob = policy.act(state)
+        state, reward, terminated, truncated, _ = env.step(action)
+
+        log_probs.append(log_prob)
+        rewards.append(reward)
+
+        if terminated or truncated:
+            break
+
+    # Calculate the return
+    returns = compute_returns(rewards, gamma)
+    # Standardize the returns to make the training more stable
+    returns = torch.tensor(returns)
+    eps = np.finfo(np.float32).eps.item()  # Guard against division by zero (std=0)
+    returns = (returns - returns.mean()) / (returns.std() + eps)
+
+    # Calculate the policy loss
+    loss = -torch.tensor(log_probs).dot(returns)
+
+    # Add the entropy term if specified
+    if entropy_coef:
+        loss += entropy_coef * sum(
+            [Categorical(logits=logits).entropy() for logits in log_probs]
+        )
+
+    return loss, sum(rewards)
+
+
+def reinforce_train_loop(
+    policy,
+    env,
+    learning_rate,
+    n_training_episodes,
+    max_t,
+    gamma,
+    print_every=100,
+    entropy_coef: float | None = None,
 ):
-    """REINFORCE algorithm.
+    """REINFORCE algorithm. A basic policy gradient method.
 
+    The discounted returns at each timestep, are calculated as:
+        G_t = r_(t+1) + gamma*G_(t+1)
+    This follows a dynamic programming approach, with which we memorize solutions in order to avoid computing
+    them multiple times.
 
+    We compute this starting from the last timestep to the first, in order to employ the formula presented above
+    and avoid redundant computations that would be needed if we were to do it from first to last.
 
     Args:
         policy (Policy): Policy network
@@ -157,125 +193,70 @@ def reinforce(
         print_every (int): Print after this many episodes
     """
 
-    scores_deque = deque(maxlen=100)
-    scores = []
+    optimizer = optim.Adam(policy.parameters(), lr=learning_rate)
+    # scheduler = MultiStepLR(optimizer, milestones=[1000], gamma=0.1)
 
-    # TODO: move the loop out, have the func be just one episode
+    # TODO: wrap env in RecordVideo and RecordEpisodeStatistics
+
     for i_episode in range(1, n_training_episodes + 1):
-        saved_log_probs = []
-        rewards = []
-        state, _ = env.reset()
+        loss, summed_reward = reinforce_episode(policy, env, max_t, gamma, entropy_coef)
 
-        for t in range(max_t):
-            state = np.array(state)
-            action, log_prob = policy.act(state)
-            saved_log_probs.append(log_prob)
-            state, reward, done, _, _ = env.step(action)
-            rewards.append(reward)
-            if done:
-                break
-        scores_deque.append(sum(rewards))
-        scores.append(sum(rewards))
-
-        # Calculate the return
-        returns = deque(maxlen=max_t)
-        n_steps = len(rewards)
-        # Compute the discounted returns at each timestep,
-        # G_t = r_(t+1) + gamma*G_(t+1)
-        # (this follows a dynamic programming approach, with which we memorize solutions in order
-        # to avoid computing them multiple times)
-
-        # Given the above, we calculate the returns at timestep t as:
-        #               gamma[t] * return[t] + reward[t]
-        #
-        # We compute this starting from the last timestep to the first, in order
-        # to employ the formula presented above and avoid redundant computations that would be needed
-        # if we were to do it from first to last.
-
-        # Using deque here to prepend in O(1) to keep the returns in chronological order
-        # TODO range(n_steps)[::-1] is equivalent to reversed(range(n_steps))
-        for t in reversed(range(n_steps)):
-            disc_return_t = returns[0] if len(returns) > 0 else 0
-            returns.appendleft(gamma * disc_return_t + rewards[t])
-
-        # Standardize the returns to make the training more stable
-        eps = np.finfo(np.float32).eps.item()
-        returns = torch.tensor(returns)
-        # Guard against division by zero (std=0)
-        returns = (returns - returns.mean()) / (returns.std() + eps)
-
-        policy_loss = []
-        for log_prob, disc_return in zip(saved_log_probs, returns):
-            policy_loss.append(-log_prob * disc_return)
-        policy_loss = torch.cat(policy_loss).sum()
-
-        # Zero out the gradients, perform a backward pass, and update the policy parameters w/ optimizer
+        # Update the policy parameters w/ optimizer based on gradients computed during backward pass
         optimizer.zero_grad()
-        policy_loss.backward()
+        loss.backward()
         optimizer.step()
+        # scheduler.step()
 
         if i_episode % print_every == 0:
             print(
-                "Episode {}\tAverage Score: {:.2f}".format(
-                    i_episode, np.mean(scores_deque)
-                )
+                f"Episode {i_episode:6d} | Loss: {loss.item(): 2.4f} | Summed Reward: {np.mean(summed_reward): 2.4f}"
             )
 
-    return scores
 
+if __name__ == "__main__":
+    env_id = "FlappyBird-v0"
+    # TODO: FrameStack can still work even for state observations
+    env = gym.make(env_id, render_mode="rgb_array", use_lidar=False)
 
-env_id = "FlappyBird-v0"
-frame_stack = 4
-env = gym.make(env_id, render_mode="rgb_array", use_lidar=False)
-env = FrameStack(env, num_stack=frame_stack)
-# TODO: GrayscaleObservation
-hpars = {
-    "n_training_episodes": 10,
-    "n_evaluation_episodes": 10,
-    "max_t": 10_000,
-    "gamma": 0.99,
-    "lr": 1e-4,
-    "env_id": env_id,
-    "frame_stack": frame_stack,
-    "action_dim": int(env.action_space.n),
-}
+    hpars = {
+        "n_training_episodes": 10_000,
+        "n_evaluation_episodes": 10,
+        "max_t": 10_000,
+        "gamma": 0.99,
+        "lr": 1e-4,
+        "env_id": env_id,
+        "entropy_coeff": None,
+        # TODO: Include seeds for reproducibility
+    }
 
+    torch.manual_seed(50)
+    policy_file = "model_from_hf.pt"
+    exists = os.path.exists(policy_file)
+    reload = True
+    policy = (
+        torch.load(policy_file, weights_only=False, map_location=device)
+        if exists and reload
+        else FlappyBirdStatePolicy().to(device)
+    )
 
-# Create policy and place it to the device
-# torch.manual_seed(50)
-policy = FlappyBirdImagePolicy(
-    frame_stack=hpars["frame_stack"],
-    action_dim=hpars["action_dim"],
-).to(device)
-optimizer = optim.Adam(policy.parameters(), lr=hpars["lr"])
+    print("Training a bird how to flap with Reinforce...")
+    reinforce_train_loop(
+        policy,
+        env,
+        hpars["lr"],
+        hpars["n_training_episodes"],
+        hpars["max_t"],
+        hpars["gamma"],
+        entropy_coef=hpars["entropy_coeff"],
+    )
 
-print("Training a bird how to flap with Reinforce...")
-print(f"{hpars=}")
-print(f"{optimizer=}")
-scores = reinforce(
-    policy,
-    optimizer,
-    env,
-    hpars["n_training_episodes"],
-    hpars["max_t"],
-    hpars["gamma"],
-)
+    torch.save(policy, "flappybird_policy.pt")
 
-torch.save(policy, "flappybird_policy.pt")
-
-
-# Hugging Face repo ID
-# model_id = f"Reinforce-{env_id}"
-# repo_id = f"jacobnzw/{model_id}"
-# eval_env = gym.make(env_id)
-
-# User prompt: Login to Hugging Face
-# login()
-# package_to_hub(
-#     model=policy,
-#     model_name=model_id,
-#     repo_id=repo_id,
-#     end_id=env_id,
-#     eval_env=eval_env,
-#     video_fps=30,
-# )
+    # Hugging Face repo ID
+    model_id = f"Reinforce-{env_id}"
+    repo_id = f"jacobnzw/{model_id}"
+    eval_env = gym.make(env_id, render_mode="rgb_array", use_lidar=False)
+    # push_to_hub(repo_id, env_id, policy, hpars, eval_env)
+    # TODO: better recording with gymnasium RecordVideo and RecordEpisodeStatistics
+    # TODO: better reproducible eval per Grok
+    record_video(eval_env, policy, "flappybird_reinforce.mp4", fps=30)
