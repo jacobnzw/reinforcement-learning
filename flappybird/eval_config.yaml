@@ -1,0 +1,6 @@
+env_id: FlappyBird-v0
+n_episodes: 10  # eval on this many episodes
+max_episode_steps: 10_000
+gamma: 0.99
+seed: 0  # different from training seed
+load_model_path: flappybird_policy.pt  # path to load the model from

@@ -1,5 +1,6 @@
 import os
 from collections import deque
+from pathlib import Path
 from typing import Callable
 
 import flappy_bird_gymnasium  # noqa: F401
@@ -9,6 +10,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import typer
+from hydra import compose, initialize_config_dir
+from omegaconf import DictConfig
 from torch.distributions import Categorical
 
 # from huggingface_hub import login
@@ -16,6 +20,7 @@ from torch.distributions import Categorical
 from utils import push_to_hub, record_video  # noqa: F401
 
 device = torch.accelerator.current_accelerator()
+app = typer.Typer()
 
 
 class FlappyBirdImagePolicy(nn.Module):
@@ -90,6 +95,7 @@ class FlappyBirdStatePolicy(nn.Module):
       - player's rotation
     """
 
+    # TODO: FrameStack could be optional
     def __init__(self, state_dim=12, hidden_dim=64, action_dim=2):
         super(FlappyBirdStatePolicy, self).__init__()
 
@@ -116,6 +122,16 @@ class FlappyBirdStatePolicy(nn.Module):
         action = dist.sample() if not deterministic else dist.probs.argmax()
         # return the action and its log probability under categorical distribution
         return action.item(), dist.log_prob(action)
+
+
+def load_config(config_path: Path) -> DictConfig:
+    """Load Hydra config from file."""
+    config_path = Path(config_path).resolve()
+    config_dir = str(config_path.parent)
+    config_name = config_path.stem
+    with initialize_config_dir(version_base=None, config_dir=config_dir):
+        cfg = compose(config_name=config_name)
+    return cfg
 
 
 def save_model_with_metadata(model, filepath, **metadata):
@@ -145,7 +161,7 @@ def load_model_with_metadata(filepath, model_class, device=None):
 
 def make_env(
     env_id,
-    render_mode="rbg_array",
+    render_mode="rgb_array",
     record_stats=False,
     max_episode_steps: int | None = 10_000,
     stack_size: int | None = None,
@@ -163,10 +179,13 @@ def make_env(
         if episode_trigger is None:
             print("No episode trigger provided.")
         env = gym.wrappers.RecordVideo(
-            env, video_folder, episode_trigger=episode_trigger
+            env,
+            video_folder,
+            episode_trigger=episode_trigger,
+            disable_logger=True,
         )
     if stack_size:
-        env = gym.wrappers.FrameStack(env, stack_size)
+        env = gym.wrappers.FrameStack(env, num_stack=stack_size)
     return env
 
 
@@ -192,6 +211,22 @@ def compute_returns(rewards, gamma, normalize=True, device="cuda"):
 
 
 def reinforce_episode(policy, env, gamma, entropy_coef: float | None = None):
+    """Unroll the policy in the environment for one episode and compute the loss.
+
+    The discounted returns at each timestep, are calculated as:
+
+        G_t = r_(t+1) + gamma*G_(t+1)
+
+    This follows a dynamic programming approach, with which we memorize solutions in order to avoid computing
+    them multiple times. We compute this starting from the last timestep to the first, in order to employ the formula
+    presented above and avoid redundant computations that would be needed if we were to do it from first to last.
+
+    Args:
+        policy (FlappyBirdStatePolicy): Policy network
+        env (gymnasium.Env): Environment
+        gamma (float): Discount factor
+        entropy_coef (float | None): Entropy coefficient. If None, no entropy term is added to the loss.
+    """
     if env.spec.max_episode_steps is None:
         raise ValueError(
             "Env must have a finite max episode length. Check if env is wrapped in TimeLimit."
@@ -199,11 +234,11 @@ def reinforce_episode(policy, env, gamma, entropy_coef: float | None = None):
 
     log_probs = []
     rewards = []
-    state, _ = env.reset()
 
     # Collect trajectory: run the whole episode
+    state, _ = env.reset()
     episode_over = False
-    while not episode_over:  # expecting gymnasium.wrappers.TimeLimit applied on env
+    while not episode_over:  # expecting env.spec.max_episode_steps is not None
         action, log_prob = policy.act(state)
         state, reward, terminated, truncated, _ = env.step(action)
 
@@ -231,42 +266,43 @@ def reinforce_episode(policy, env, gamma, entropy_coef: float | None = None):
     return loss, sum(rewards), entropy_term
 
 
-def reinforce_train_loop(
-    policy,
-    env,
-    learning_rate,
-    n_training_episodes,
-    gamma,
-    print_every=100,
-    entropy_coef: float | None = None,
-):
-    """REINFORCE algorithm. A basic policy gradient method.
+@app.command()
+def train(config_path: str = "train_config.yaml"):
+    """Train using REINFORCE algorithm. A basic policy gradient method."""
 
-    The discounted returns at each timestep, are calculated as:
-        G_t = r_(t+1) + gamma*G_(t+1)
-    This follows a dynamic programming approach, with which we memorize solutions in order to avoid computing
-    them multiple times.
+    cfg = load_config(config_path)
 
-    We compute this starting from the last timestep to the first, in order to employ the formula presented above
-    and avoid redundant computations that would be needed if we were to do it from first to last.
+    env = make_env(
+        cfg.env_id,
+        render_mode="rgb_array",
+        max_episode_steps=cfg.max_episode_steps,
+        video_folder="videos/",
+        episode_trigger=lambda e: e % 5000 == 0,  # Record every 1000th episode
+        use_lidar=False,
+    )
 
-    Args:
-        policy (Policy): Policy network
-        optimizer (optim.Optimizer): Optimizer
-        env (gymmasium.Env): Environment
-        n_training_episodes (int): Number of training episodes
-        gamma (float): Discount factor
-        print_every (int): Print after this many episodes
-    """
+    # Set seeds for reproducibility
+    torch.manual_seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    env.reset(seed=cfg.seed)
 
-    optimizer = optim.Adam(policy.parameters(), lr=learning_rate)
+    # Set up policy model
+    if cfg.load_model_path and os.path.exists(cfg.load_model_path):
+        policy = load_model_with_metadata(
+            cfg.load_model_path, FlappyBirdStatePolicy, device
+        )[0]
+        print(f"Loaded model from {cfg.load_model_path}")
+    else:
+        policy = FlappyBirdStatePolicy().to(device)
+
+    optimizer = optim.Adam(policy.parameters(), lr=cfg.learning_rate)
     # scheduler = MultiStepLR(optimizer, milestones=[1000], gamma=0.1)
 
-    # TODO: wrap env in RecordVideo and RecordEpisodeStatistics
+    print("Training a bird how to flap with Reinforce...")
 
-    for i_episode in range(1, n_training_episodes + 1):
+    for i_episode in range(cfg.n_episodes):
         loss, summed_reward, entropy_term = reinforce_episode(
-            policy, env, gamma, entropy_coef
+            policy, env, cfg.gamma, cfg.entropy_coeff
         )
 
         # Update the policy parameters w/ optimizer based on gradients computed during backward pass
@@ -275,68 +311,80 @@ def reinforce_train_loop(
         optimizer.step()
         # scheduler.step()
 
-        if i_episode % print_every == 0:
+        if i_episode % cfg.print_every == cfg.print_every - 1:
             print(
-                f"Episode {i_episode:6d} | Reward Sum: {summed_reward: 2.4f} | "
-                f"Loss: {loss.item(): 2.4f} | Entropy: {entropy_term: 2.4f}"
+                f"Episode {i_episode + 1:> 6d} | Reward Sum: {summed_reward:> 10.4f} | "
+                f"Loss: {loss.item():> 10.4f} | Entropy: {entropy_term:> g}"
             )
 
+    env.close()
+    save_model_with_metadata(policy, cfg.save_model_path, **cfg)
 
-if __name__ == "__main__":
-    env_id = "FlappyBird-v0"
-    # TODO: FrameStack can still work even for state observations
+
+@app.command()
+def eval(
+    config_path: str = typer.Option(
+        "eval_config.yaml", help="Evaluation config file path"
+    ),
+    stochastic: bool = typer.Option(
+        False, "--stochastic", "-s", help="Whether to use stochastic policy"
+    ),
+):
+    """Evaluate the policy."""
+    cfg = load_config(config_path)
+
+    policy, meta = load_model_with_metadata(
+        cfg.load_model_path, FlappyBirdStatePolicy, device
+    )
+    print(
+        f"Evaluating policy loaded from {cfg.load_model_path} with metadata:\n {meta}"
+    )
+
     env = make_env(
-        env_id,
-        render_mode="rgb_array",
-        max_episode_steps=10_000,
-        video_folder="videos/",
-        episode_trigger=lambda e: e % 1000 == 0,  # Record every 1000th episode
+        cfg.env_id,
+        record_stats=True,
+        max_episode_steps=cfg.max_episode_steps,
+        video_folder="eval_videos/",
+        episode_trigger=lambda e: e in (1, 3, 7, 9),
         use_lidar=False,
     )
 
-    # Set seeds for reproducibility
-    seed = 42
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    env.reset(seed=seed)
+    episode_rewards = []
+    for episode in range(cfg.n_episodes):
+        # Each episode has predictable seed for reproducible evaluation
+        # making sure policy can cope with env stochasticity
+        state, _ = env.reset(seed=cfg.seed + episode)
+        done = False
+        while not done:
+            action, _ = policy.act(state, deterministic=not stochastic)
+            state, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
 
-    hpars = {
-        "env_id": env_id,
-        "seed": seed,
-        "n_training_episodes": 1000,
-        "n_evaluation_episodes": 10,
-        "max_episode_steps": 10_000,
-        "gamma": 0.99,
-        "lr": 1e-4,
-        "entropy_coeff": None,
-    }
+        # Extract episode statistics from info (available after episode ends)
+        if "episode" in info:
+            episode_reward = info["episode"]["r"][0]
+            episode_length = info["episode"]["l"][0]
+            episode_rewards.append(episode_reward)
+            print(
+                f"Episode {episode + 1} | Reward: {episode_reward:.2f} | Length: {episode_length}"
+            )
 
-    policy_file = "flappybird_policy.pt"
-    exists = os.path.exists(policy_file)
-    reload = True
-    policy = (
-        load_model_with_metadata(policy_file, FlappyBirdStatePolicy, device)[0]
-        if exists and reload
-        else FlappyBirdStatePolicy().to(device)
-    )
+    if episode_rewards:
+        mean_reward = np.mean(episode_rewards)
+        std_reward = np.std(episode_rewards)
+        print(
+            f"\nMean reward over {len(episode_rewards)} episodes: {mean_reward:.2f} +/- {std_reward:.2f}"
+        )
 
-    print("Training a bird how to flap with Reinforce...")
-    reinforce_train_loop(
-        policy,
-        env,
-        hpars["lr"],
-        hpars["n_training_episodes"],
-        hpars["gamma"],
-        entropy_coef=hpars["entropy_coeff"],
-    )
     env.close()
-    save_model_with_metadata(policy, "flappybird_policy.pt", **hpars)
 
     # Hugging Face repo ID
     # model_id = f"Reinforce-{env_id}"
     # repo_id = f"jacobnzw/{model_id}"
     # eval_env = gym.make(env_id, render_mode="rgb_array", use_lidar=False)
     # push_to_hub(repo_id, env_id, policy, hpars, eval_env)
-    # TODO: better recording with gymnasium RecordVideo and RecordEpisodeStatistics
-    # TODO: better reproducible eval per Grok
     # record_video(eval_env, policy, "flappybird_reinforce.mp4", fps=30)
+
+
+if __name__ == "__main__":
+    app()

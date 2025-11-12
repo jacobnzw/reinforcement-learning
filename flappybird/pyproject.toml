@@ -5,10 +5,12 @@ requires-python = ">=3.11"
 dependencies = [
     "flappy-bird-gymnasium>=0.4.0",
     "huggingface-sb3>=3.0",
+    "hydra-core>=1.3.2",
     "moviepy>=2.2.1",
     "opencv-python>=4.8.1.78",
     "stable-baselines3>=2.7.0",
     "torch>=2.9.0",
+    "typer>=0.20.0",
 ]
 
 [project.optional-dependencies]
