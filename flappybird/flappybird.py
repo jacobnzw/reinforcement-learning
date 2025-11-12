@@ -1,5 +1,6 @@
 import os
 from collections import deque
+from typing import Callable
 
 import flappy_bird_gymnasium  # noqa: F401
 import gymnasium as gym
@@ -117,20 +118,53 @@ class FlappyBirdStatePolicy(nn.Module):
         return action.item(), dist.log_prob(action)
 
 
+def save_model_with_metadata(model, filepath, **metadata):
+    """Save model with metadata safely."""
+    save_dict = {
+        "model_state_dict": model.state_dict(),
+        "model_class": model.__class__.__name__,
+        "metadata": metadata,
+    }
+    torch.save(save_dict, filepath)
+
+
+def load_model_with_metadata(filepath, model_class, device=None):
+    """Load model with metadata safely."""
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Load with weights_only=True for security
+    checkpoint = torch.load(filepath, weights_only=True, map_location=device)
+
+    # Create new model instance
+    model = model_class().to(device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+
+    return model, checkpoint["metadata"]
+
+
 def make_env(
     env_id,
     render_mode="rbg_array",
     record_stats=False,
     max_episode_steps: int | None = 10_000,
     stack_size: int | None = None,
+    video_folder: str | None = None,
+    episode_trigger: Callable[[int], bool] | None = None,
     **kwargs,
 ):
     """Make the environment."""
-    env = gym.make(env_id, render_mode=render_mode, **kwargs)
+    env = gym.make(
+        env_id, render_mode=render_mode, max_episode_steps=max_episode_steps, **kwargs
+    )
     if record_stats:
         env = gym.wrappers.RecordEpisodeStatistics(env)
-    if max_episode_steps:
-        env = gym.wrappers.TimeLimit(env, max_episode_steps)
+    if video_folder:
+        if episode_trigger is None:
+            print("No episode trigger provided.")
+        env = gym.wrappers.RecordVideo(
+            env, video_folder, episode_trigger=episode_trigger
+        )
     if stack_size:
         env = gym.wrappers.FrameStack(env, stack_size)
     return env
@@ -165,7 +199,7 @@ def reinforce_episode(policy, env, gamma, entropy_coef: float | None = None):
 
     log_probs = []
     rewards = []
-    state, _ = env.reset()  # TODO: seed?
+    state, _ = env.reset()
 
     # Collect trajectory: run the whole episode
     episode_over = False
@@ -252,11 +286,12 @@ if __name__ == "__main__":
     env_id = "FlappyBird-v0"
     # TODO: FrameStack can still work even for state observations
     env = make_env(
-        env_id, render_mode="rgb_array", max_episode_steps=10_000, use_lidar=False
-    )
-
-    env = gym.wrappers.RecordVideo(
-        env, "videos/", episode_trigger=lambda e: e % 1000 == 0
+        env_id,
+        render_mode="rgb_array",
+        max_episode_steps=10_000,
+        video_folder="videos/",
+        episode_trigger=lambda e: e % 1000 == 0,  # Record every 1000th episode
+        use_lidar=False,
     )
 
     # Set seeds for reproducibility
@@ -266,21 +301,21 @@ if __name__ == "__main__":
     env.reset(seed=seed)
 
     hpars = {
-        "n_training_episodes": 1,
+        "env_id": env_id,
+        "seed": seed,
+        "n_training_episodes": 1000,
         "n_evaluation_episodes": 10,
         "max_episode_steps": 10_000,
         "gamma": 0.99,
         "lr": 1e-4,
-        "env_id": env_id,
         "entropy_coeff": None,
-        "seed": seed,
     }
 
-    policy_file = "model_from_hf.pt"
+    policy_file = "flappybird_policy.pt"
     exists = os.path.exists(policy_file)
-    reload = False
+    reload = True
     policy = (
-        torch.load(policy_file, weights_only=False, map_location=device)
+        load_model_with_metadata(policy_file, FlappyBirdStatePolicy, device)[0]
         if exists and reload
         else FlappyBirdStatePolicy().to(device)
     )
@@ -295,7 +330,7 @@ if __name__ == "__main__":
         entropy_coef=hpars["entropy_coeff"],
     )
     env.close()
-    torch.save(policy, "flappybird_policy.pt")
+    save_model_with_metadata(policy, "flappybird_policy.pt", **hpars)
 
     # Hugging Face repo ID
     # model_id = f"Reinforce-{env_id}"
