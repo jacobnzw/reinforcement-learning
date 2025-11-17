@@ -22,6 +22,8 @@ from utils import push_to_hub, record_video  # noqa: F401
 device = torch.accelerator.current_accelerator()
 app = typer.Typer()
 
+# TODO: add tensorboard logging
+
 
 class FlappyBirdImagePolicy(nn.Module):
     """Network represeting the agent's policy $\pi_\theta(a | s)$."""
@@ -121,7 +123,7 @@ class FlappyBirdStatePolicy(nn.Module):
         dist = Categorical(probs)
         action = dist.sample() if not deterministic else dist.probs.argmax()
         # return the action and its log probability under categorical distribution
-        return action.item(), dist.log_prob(action)
+        return action, dist.log_prob(action), dist.logits
 
 
 def load_config(config_path: Path) -> DictConfig:
@@ -233,16 +235,18 @@ def reinforce_episode(policy, env, gamma, entropy_coef: float | None = None):
         )
 
     log_probs = []
+    logits = []
     rewards = []
 
     # Collect trajectory: run the whole episode
     state, _ = env.reset()
     episode_over = False
     while not episode_over:  # expecting env.spec.max_episode_steps is not None
-        action, log_prob = policy.act(state)
-        state, reward, terminated, truncated, _ = env.step(action)
+        action, log_prob, dist_logit = policy.act(state)
+        state, reward, terminated, truncated, _ = env.step(action.item())
 
         log_probs.append(log_prob)
+        logits.append(dist_logit)
         rewards.append(reward)
 
         episode_over = terminated or truncated
@@ -256,8 +260,7 @@ def reinforce_episode(policy, env, gamma, entropy_coef: float | None = None):
 
     # Add the entropy term if specified
     entropy_term = (
-        entropy_coef
-        * sum([Categorical(logits=logits).entropy() for logits in log_probs])
+        entropy_coef * Categorical(logits=torch.stack(logits)).entropy().sum()
         if entropy_coef
         else 0.0
     )
@@ -314,7 +317,7 @@ def train(config_path: str = "train_config.yaml"):
         if i_episode % cfg.print_every == cfg.print_every - 1:
             print(
                 f"Episode {i_episode + 1:> 6d} | Reward Sum: {summed_reward:> 10.4f} | "
-                f"Loss: {loss.item():> 10.4f} | Entropy: {entropy_term:> g}"
+                f"Loss: {loss.item():> 10.4f} | Entropy: {entropy_term.item():> g}"
             )
 
     env.close()
@@ -345,7 +348,7 @@ def eval(
         record_stats=True,
         max_episode_steps=cfg.max_episode_steps,
         video_folder="eval_videos/",
-        episode_trigger=lambda e: e in (1, 3, 7, 9),
+        # episode_trigger=lambda e: e in (1, 3, 7, 9),
         use_lidar=False,
     )
 
@@ -356,8 +359,8 @@ def eval(
         state, _ = env.reset(seed=cfg.seed + episode)
         done = False
         while not done:
-            action, _ = policy.act(state, deterministic=not stochastic)
-            state, reward, terminated, truncated, info = env.step(action)
+            action, _, _ = policy.act(state, deterministic=not stochastic)
+            state, reward, terminated, truncated, info = env.step(action.item())
             done = terminated or truncated
 
         # Extract episode statistics from info (available after episode ends)

@@ -5,6 +5,6 @@ gamma: 0.99
 learning_rate: 1e-4
 entropy_coeff: 0.01
 seed: 42
-load_model_path: flappybird_policy.pt  # loads this model and continues training when specified
+load_model_path:  # loads this model and continues training when specified
 save_model_path: flappybird_policy.pt  # path to save the model
 print_every: 250  # print after this many episodes
