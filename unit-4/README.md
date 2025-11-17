@@ -3,7 +3,10 @@ This unit covers policy gradient methods, specifically the REINFORCE algorithm, 
 
 
 ## Overview
-Policy gradient methods directly optimize the policy by computing gradients of the expected return with respect to policy parameters. Unlike value-based methods (Q-learning, DQN), policy gradients can handle:- Continuous action spaces
+Policy gradient methods directly optimize the policy by computing gradients of the expected return with respect to 
+policy parameters. Unlike value-based methods (Q-learning, DQN), policy gradients can handle:
+
+- Continuous action spaces
 - Stochastic policies
 - High-dimensional action spaces
 
