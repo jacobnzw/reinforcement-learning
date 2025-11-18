@@ -137,18 +137,22 @@ def load_config(config_path: Path) -> DictConfig:
     return cfg
 
 
-def save_model_with_metadata(model, filepath, **metadata):
+def save_model_with_metadata(filepath: str, model, **metadata):
     """Save model with metadata safely."""
     save_dict = {
         "model_state_dict": model.state_dict(),
         "model_class": model.__class__.__name__,
         "metadata": metadata,
     }
+    Path(filepath).parent.mkdir(parents=True, exist_ok=True)
     torch.save(save_dict, filepath)
 
 
-def load_model_with_metadata(filepath, model_class, device=None):
+def load_model_with_metadata(filepath: str, model_class, device=None):
     """Load model with metadata safely."""
+    if not Path(filepath).exists():
+        raise FileNotFoundError(f"Model file not found at {filepath}")
+
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -208,7 +212,9 @@ def compute_returns(rewards, gamma, normalize=True, device="cuda"):
     returns = torch.tensor(returns, device=device, dtype=torch.float32)
     if normalize:
         eps = np.finfo(np.float32).eps.item()  # Guard against division by zero (std=0)
-        returns = (returns - returns.mean()) / (returns.std() + eps)
+        mean, std = returns.mean(), returns.std()
+        returns = (returns - mean) / (std + eps)
+        return returns, mean, std
 
     return returns
 
@@ -269,7 +275,9 @@ def reinforce_episode(
         episode_over = terminated or truncated
 
     # Calculate the (discounted) returns for each time step
-    returns = compute_returns(rewards, gamma, normalize=True, device=device)
+    returns, ret_mean, ret_std = compute_returns(
+        rewards, gamma, normalize=True, device=device
+    )
 
     # Calculate the policy loss
     # torch.stack and @ preserve gradients (doesn't break computation graph as opposed to torch.tensor and .dot())
@@ -289,9 +297,9 @@ def reinforce_episode(
         writer.add_scalar("Loss/Total", loss.item(), i_episode)
         if entropy_coef:
             writer.add_scalar("Loss/Entropy Term", entropy_term.item(), i_episode)
-        # Policy stats
-        writer.add_scalar("Policy/Return Mean", returns.mean().item(), i_episode)
-        writer.add_scalar("Policy/Return STD", returns.std().item(), i_episode)
+        # Policy stats FIXME: log mean and std from copute_returns
+        writer.add_scalar("Policy/Return Mean", ret_mean.item(), i_episode)
+        writer.add_scalar("Policy/Return STD", ret_std.item(), i_episode)
         if "episode" in info:
             writer.add_scalar("Episode/Reward", info["episode"]["r"], i_episode)
             writer.add_scalar("Episode/Length", info["episode"]["l"], i_episode)
@@ -371,7 +379,7 @@ def train(config_path: str = "train_config.yaml"):
     writer.close()
     env.close()
 
-    save_model_with_metadata(policy, cfg.save_model_path, **cfg)
+    save_model_with_metadata(cfg.save_model_path, policy, **cfg)
 
 
 @app.command()
