@@ -14,6 +14,7 @@ import typer
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig
 from torch.distributions import Categorical
+from torch.utils.tensorboard import SummaryWriter
 
 # from huggingface_hub import login
 # from huggingface_sb3 import package_to_hub
@@ -212,7 +213,13 @@ def compute_returns(rewards, gamma, normalize=True, device="cuda"):
     return returns
 
 
-def reinforce_episode(policy, env, gamma, entropy_coef: float | None = None):
+def reinforce_episode(
+    policy,
+    env,
+    gamma,
+    entropy_coef: float | None = None,
+    writer: SummaryWriter | None = None,
+):
     """Unroll the policy in the environment for one episode and compute the loss.
 
     The discounted returns at each timestep, are calculated as:
@@ -243,7 +250,7 @@ def reinforce_episode(policy, env, gamma, entropy_coef: float | None = None):
     episode_over = False
     while not episode_over:  # expecting env.spec.max_episode_steps is not None
         action, log_prob, dist_logit = policy.act(state)
-        state, reward, terminated, truncated, _ = env.step(action.item())
+        state, reward, terminated, truncated, info = env.step(action.item())
 
         log_probs.append(log_prob)
         logits.append(dist_logit)
@@ -251,7 +258,7 @@ def reinforce_episode(policy, env, gamma, entropy_coef: float | None = None):
 
         episode_over = terminated or truncated
 
-    # Calculate the return
+    # Calculate the (discounted) returns for each time step
     returns = compute_returns(rewards, gamma, normalize=True, device=device)
 
     # Calculate the policy loss
@@ -265,6 +272,21 @@ def reinforce_episode(policy, env, gamma, entropy_coef: float | None = None):
         else 0.0
     )
     loss += entropy_term
+
+    if writer:
+        i_episode = (
+            env.episode_count
+        )  # present if env is wrapped in RecordEpisodeStatistics
+        writer.add_scalar("Loss", loss.item(), i_episode)
+        if entropy_coef:
+            writer.add_scalar("Entropy Term", entropy_term.item(), i_episode)
+        # Policy stats
+        writer.add_scalar("Policy/Return Mean", returns.mean().item(), i_episode)
+        writer.add_scalar("Policy/Return STD", returns.std().item(), i_episode)
+        if "episode" in info:
+            writer.add_scalar("Episode Reward", info["episode"]["r"], i_episode)
+            writer.add_scalar("Episode Length", info["episode"]["l"], i_episode)
+            writer.add_scalar("Episode Duration", info["episode"]["t"], i_episode)
 
     return loss, sum(rewards), entropy_term
 
@@ -301,11 +323,11 @@ def train(config_path: str = "train_config.yaml"):
     optimizer = optim.Adam(policy.parameters(), lr=cfg.learning_rate)
     # scheduler = MultiStepLR(optimizer, milestones=[1000], gamma=0.1)
 
-    print("Training a bird how to flap with Reinforce...")
-
+    writer = SummaryWriter(f"logs/run_lr{cfg.learning_rate}_ec{cfg.entropy_coeff}")
+    print("Training Flappy with REINFORCE...")
     for i_episode in range(cfg.n_episodes):
         loss, summed_reward, entropy_term = reinforce_episode(
-            policy, env, cfg.gamma, cfg.entropy_coeff
+            policy, env, cfg.gamma, cfg.entropy_coeff, writer
         )
 
         # Update the policy parameters w/ optimizer based on gradients computed during backward pass
@@ -320,7 +342,16 @@ def train(config_path: str = "train_config.yaml"):
                 f"Loss: {loss.item():> 10.4f} | Entropy: {entropy_term.item():> g}"
             )
 
+    # Log hyperparameters and summary metrics
+    buffer_size = env.return_queue.maxlen
+    writer.add_hparams(
+        hparam_dict=cfg,
+        metric_dict={f"max_reward_last_{buffer_size}_episodes": max(env.return_queue)},
+    )
+
+    writer.close()
     env.close()
+
     save_model_with_metadata(policy, cfg.save_model_path, **cfg)
 
 
