@@ -108,7 +108,6 @@ class FlappyBirdStatePolicy(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, action_dim),
-            nn.Softmax(dim=1),
         )
 
     def forward(self, x):
@@ -118,13 +117,13 @@ class FlappyBirdStatePolicy(nn.Module):
         """Select an action given the state."""
 
         state = torch.from_numpy(state).float().unsqueeze(0).to(device)
-        probs = self.forward(state)
+        logits = self.forward(state)
 
         # convert probs to a categorical distribution and sample the action from it
-        dist = Categorical(probs)
-        action = dist.sample() if not deterministic else dist.probs.argmax()
+        dist = Categorical(logits=logits)
+        action = dist.sample() if not deterministic else dist.mode.item()
         # return the action and its log probability under categorical distribution
-        return action, dist.log_prob(action), dist.logits
+        return action, dist.log_prob(action), logits
 
 
 def load_config(config_path: Path) -> DictConfig:
@@ -320,8 +319,7 @@ def train(config_path: str = "train_config.yaml"):
         max_episode_steps=cfg.max_episode_steps,
         record_stats=True,
         video_folder="videos/train",
-        episode_trigger=lambda e: e % cfg.record_every
-        == 0,  # Record every 1000th episode
+        episode_trigger=lambda e: e % cfg.record_every == 0,
         use_lidar=False,
     )
 
@@ -359,6 +357,9 @@ def train(config_path: str = "train_config.yaml"):
         loss.backward()
         optimizer.step()
         scheduler.step()
+
+        # TODO: add batching: accumulate loss over several episodes and update only once
+        # TODO: try gradient clipping if batching won't help much
 
         if i_episode % cfg.print_every == cfg.print_every - 1:
             print(
