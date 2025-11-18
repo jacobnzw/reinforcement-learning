@@ -213,6 +213,16 @@ def compute_returns(rewards, gamma, normalize=True, device="cuda"):
     return returns
 
 
+def gradient_norm(model):
+    """Compute the gradient L2 norm of the model."""
+    total_norm = 0
+    for p in model.parameters():
+        param_norm = p.grad.detach().data.norm(2)
+        total_norm += param_norm.item() ** 2
+    total_norm = total_norm**0.5
+    return total_norm
+
+
 def reinforce_episode(
     policy,
     env,
@@ -274,19 +284,18 @@ def reinforce_episode(
     loss += entropy_term
 
     if writer:
-        i_episode = (
-            env.episode_count
-        )  # present if env is wrapped in RecordEpisodeStatistics
-        writer.add_scalar("Loss", loss.item(), i_episode)
+        # present if env is wrapped in RecordEpisodeStatistics
+        i_episode = env.episode_count
+        writer.add_scalar("Loss/Total", loss.item(), i_episode)
         if entropy_coef:
-            writer.add_scalar("Entropy Term", entropy_term.item(), i_episode)
+            writer.add_scalar("Loss/Entropy Term", entropy_term.item(), i_episode)
         # Policy stats
         writer.add_scalar("Policy/Return Mean", returns.mean().item(), i_episode)
         writer.add_scalar("Policy/Return STD", returns.std().item(), i_episode)
         if "episode" in info:
-            writer.add_scalar("Episode Reward", info["episode"]["r"], i_episode)
-            writer.add_scalar("Episode Length", info["episode"]["l"], i_episode)
-            writer.add_scalar("Episode Duration", info["episode"]["t"], i_episode)
+            writer.add_scalar("Episode/Reward", info["episode"]["r"], i_episode)
+            writer.add_scalar("Episode/Length", info["episode"]["l"], i_episode)
+            writer.add_scalar("Episode/Duration", info["episode"]["t"], i_episode)
 
     return loss, sum(rewards), entropy_term
 
@@ -301,8 +310,10 @@ def train(config_path: str = "train_config.yaml"):
         cfg.env_id,
         render_mode="rgb_array",
         max_episode_steps=cfg.max_episode_steps,
-        video_folder="videos/",
-        episode_trigger=lambda e: e % 5000 == 0,  # Record every 1000th episode
+        record_stats=True,
+        video_folder="videos/train",
+        episode_trigger=lambda e: e % cfg.record_every
+        == 0,  # Record every 1000th episode
         use_lidar=False,
     )
 
@@ -321,9 +332,14 @@ def train(config_path: str = "train_config.yaml"):
         policy = FlappyBirdStatePolicy().to(device)
 
     optimizer = optim.Adam(policy.parameters(), lr=cfg.learning_rate)
-    # scheduler = MultiStepLR(optimizer, milestones=[1000], gamma=0.1)
 
-    writer = SummaryWriter(f"logs/run_lr{cfg.learning_rate}_ec{cfg.entropy_coeff}")
+    # Set up LR scheduler to decay from initial to target learning rate by the end of training
+    gamma = (cfg.target_learning_rate / cfg.learning_rate) ** (1 / cfg.n_episodes)
+    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
+
+    writer = SummaryWriter(
+        f"logs/run_lr{cfg.learning_rate:.2e}_ec{cfg.entropy_coeff:.2e}"
+    )
     print("Training Flappy with REINFORCE...")
     for i_episode in range(cfg.n_episodes):
         loss, summed_reward, entropy_term = reinforce_episode(
@@ -334,18 +350,21 @@ def train(config_path: str = "train_config.yaml"):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        # scheduler.step()
+        scheduler.step()
 
         if i_episode % cfg.print_every == cfg.print_every - 1:
             print(
                 f"Episode {i_episode + 1:> 6d} | Reward Sum: {summed_reward:> 10.4f} | "
-                f"Loss: {loss.item():> 10.4f} | Entropy: {entropy_term.item():> g}"
+                f"Loss: {loss.item():> 10.4f} | Entropy: {entropy_term.item():> .2e} | "
+                f"LR: {scheduler.get_last_lr()[0]:> .4e}"
             )
+
+        writer.add_scalar("Policy/Gradient Norm", gradient_norm(policy), i_episode)
 
     # Log hyperparameters and summary metrics
     buffer_size = env.return_queue.maxlen
     writer.add_hparams(
-        hparam_dict=cfg,
+        hparam_dict={**cfg},
         metric_dict={f"max_reward_last_{buffer_size}_episodes": max(env.return_queue)},
     )
 
@@ -378,7 +397,7 @@ def eval(
         cfg.env_id,
         record_stats=True,
         max_episode_steps=cfg.max_episode_steps,
-        video_folder="eval_videos/",
+        video_folder="videos/eval",
         # episode_trigger=lambda e: e in (1, 3, 7, 9),
         use_lidar=False,
     )
