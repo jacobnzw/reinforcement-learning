@@ -12,7 +12,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import typer
 from hydra import compose, initialize_config_dir
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from torch.distributions import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
@@ -128,6 +128,7 @@ class FlappyBirdStatePolicy(nn.Module):
 
 def load_config(config_path: Path) -> DictConfig:
     """Load Hydra config from file."""
+    # TODO: simplify hydra may be overkill here
     config_path = Path(config_path).resolve()
     config_dir = str(config_path.parent)
     config_name = config_path.stem
@@ -292,7 +293,7 @@ def reinforce_episode(
 
     if writer:
         # present if env is wrapped in RecordEpisodeStatistics
-        i_episode = env.episode_count
+        i_episode = env.get_wrapper_attr("episode_count")
         writer.add_scalar("Loss/Total", loss.item(), i_episode)
         if entropy_coef:
             writer.add_scalar("Loss/Entropy Term", entropy_term.item(), i_episode)
@@ -312,6 +313,8 @@ def train(config_path: str = "train_config.yaml"):
     """Train using REINFORCE algorithm. A basic policy gradient method."""
 
     cfg = load_config(config_path)
+    batching = cfg.batch_size is not None and cfg.batch_size > 1
+    grad_clipping = cfg.max_grad_norm is not None and cfg.max_grad_norm > 0.0
 
     env = make_env(
         cfg.env_id,
@@ -346,20 +349,20 @@ def train(config_path: str = "train_config.yaml"):
     writer = SummaryWriter(
         f"logs/run_lr{cfg.learning_rate:.2e}_ec{cfg.entropy_coeff:.2e}"
     )
-    print("Training Flappy with REINFORCE...")
+    print("\nTraining Flappy with REINFORCE...\n")
+    print(OmegaConf.to_yaml(cfg))
     for i_episode in range(cfg.n_episodes):
         loss, summed_reward, entropy_term = reinforce_episode(
             policy, env, cfg.gamma, cfg.entropy_coeff, writer
         )
 
-        # Update the policy parameters w/ optimizer based on gradients computed during backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        scheduler.step()
+        # Scale loss for gradient accumulation if batching
+        if batching:
+            loss /= cfg.batch_size
+            entropy_term /= cfg.batch_size
 
-        # TODO: add batching: accumulate loss over several episodes and update only once
-        # TODO: try gradient clipping if batching won't help much
+        # Compute gradients: accumulates if batching
+        loss.backward()
 
         if i_episode % cfg.print_every == cfg.print_every - 1:
             print(
@@ -368,7 +371,23 @@ def train(config_path: str = "train_config.yaml"):
                 f"LR: {scheduler.get_last_lr()[0]:> .4e}"
             )
 
-        writer.add_scalar("Policy/Gradient Norm", gradient_norm(policy), i_episode)
+        # Episode batching: average loss over several episodes and update only once
+        if not batching or (i_episode + 1) % cfg.batch_size == 0:
+            # Gradient clipping
+            if grad_clipping:
+                torch.nn.utils.clip_grad_norm_(
+                    policy.parameters(), max_norm=cfg.max_grad_norm
+                )
+
+            if writer:
+                writer.add_scalar(
+                    "Policy/Gradient Norm", gradient_norm(policy), i_episode
+                )
+
+            # Update parameters and clear gradients
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
 
     # Log hyperparameters and summary metrics
     buffer_size = env.return_queue.maxlen
@@ -380,7 +399,8 @@ def train(config_path: str = "train_config.yaml"):
     writer.close()
     env.close()
 
-    save_model_with_metadata(cfg.save_model_path, policy, **cfg)
+    if cfg.save_model_path is not None:
+        save_model_with_metadata(cfg.save_model_path, policy, **cfg)
 
 
 @app.command()
@@ -411,6 +431,7 @@ def eval(
         use_lidar=False,
     )
 
+    # TODO: with torch.no_grad():
     episode_rewards = []
     for episode in range(cfg.n_episodes):
         # Each episode has predictable seed for reproducible evaluation
