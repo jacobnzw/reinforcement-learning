@@ -390,7 +390,7 @@ def train(config_path: str = "train_config.yaml"):
             optimizer.zero_grad()
 
     # Log hyperparameters and summary metrics
-    buffer_size = env.return_queue.maxlen
+    buffer_size = env.get_wrapper_attr("return_queue").maxlen
     writer.add_hparams(
         hparam_dict={**cfg},
         metric_dict={f"max_reward_last_{buffer_size}_episodes": max(env.return_queue)},
