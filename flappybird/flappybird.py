@@ -1,10 +1,10 @@
-import os
 from collections import deque
 from pathlib import Path
 from typing import Callable
 
 import flappy_bird_gymnasium  # noqa: F401
 import gymnasium as gym
+import mlflow
 import numpy as np
 import torch
 import torch.nn as nn
@@ -14,7 +14,6 @@ import typer
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 from torch.distributions import Categorical
-from torch.utils.tensorboard import SummaryWriter
 
 # from huggingface_hub import login
 # from huggingface_sb3 import package_to_hub
@@ -139,6 +138,13 @@ def load_config(config_path: Path) -> DictConfig:
 
 def save_model_with_metadata(filepath: str, model, **metadata):
     """Save model with metadata safely."""
+
+    if filepath is None:
+        print("No filepath provided. Model not saved.")
+        return
+
+    print(f"Saving model to {filepath}...")
+
     save_dict = {
         "model_state_dict": model.state_dict(),
         "model_class": model.__class__.__name__,
@@ -150,7 +156,7 @@ def save_model_with_metadata(filepath: str, model, **metadata):
 
 def load_model_with_metadata(filepath: str, model_class, device=None):
     """Load model with metadata safely."""
-    if not Path(filepath).exists():
+    if filepath is None or not Path(filepath).exists():
         raise FileNotFoundError(f"Model file not found at {filepath}")
 
     if device is None:
@@ -162,6 +168,10 @@ def load_model_with_metadata(filepath: str, model_class, device=None):
     # Create new model instance
     model = model_class().to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
+
+    print(
+        f"Loaded policy model from {filepath} with metadata: {checkpoint['metadata']}"
+    )
 
     return model, checkpoint["metadata"]
 
@@ -194,6 +204,39 @@ def make_env(
     if stack_size:
         env = gym.wrappers.FrameStack(env, num_stack=stack_size)
     return env
+
+
+def make_run_name(cfg):
+    """Make a run name from the config."""
+
+    def human_format(num: int) -> str:
+        """Convert number to human readable format (e.g., 1.5k, 2.3M)."""
+        magnitude = 0
+        while abs(num) >= 1000:
+            magnitude += 1
+            num /= 1000.0
+
+        # Format with appropriate precision
+        if magnitude == 0:
+            return f"{int(num)}"
+        elif num == int(num):
+            return f"{int(num)}{['', 'k', 'M', 'B', 'T'][magnitude]}"
+        else:
+            return f"{num:.1f}{['', 'k', 'M', 'B', 'T'][magnitude]}"
+
+    name = f"e{human_format(cfg.n_episodes)}_g{cfg.gamma:.2f}_llr{cfg.target_learning_rate:.2e}"
+    if cfg.batch_size is not None and cfg.batch_size > 1:
+        name += f"_b{cfg.batch_size:d}"
+    return name
+
+
+def prepare_policy_model(load_model_path, device):
+    if load_model_path is not None and Path(load_model_path).exists():
+        return load_model_with_metadata(load_model_path, FlappyBirdStatePolicy, device)[
+            0
+        ]
+    else:
+        return FlappyBirdStatePolicy().to(device)
 
 
 def compute_returns(rewards, gamma, normalize=True, device="cuda"):
@@ -234,7 +277,7 @@ def reinforce_episode(
     env,
     gamma,
     entropy_coef: float | None = None,
-    writer: SummaryWriter | None = None,
+    log_metrics: bool = True,
 ):
     """Unroll the policy in the environment for one episode and compute the loss.
 
@@ -251,6 +294,7 @@ def reinforce_episode(
         env (gymnasium.Env): Environment
         gamma (float): Discount factor
         entropy_coef (float | None): Entropy coefficient. If None, no entropy term is added to the loss.
+        log_metrics (bool): Whether to log metrics to MLflow
     """
     if env.spec.max_episode_steps is None:
         raise ValueError(
@@ -291,19 +335,20 @@ def reinforce_episode(
     )
     loss += entropy_term
 
-    if writer:
+    if log_metrics:
         # present if env is wrapped in RecordEpisodeStatistics
         i_episode = env.get_wrapper_attr("episode_count")
-        writer.add_scalar("Loss/Total", loss.item(), i_episode)
+
+        mlflow.log_metric("loss/total", loss.item(), step=i_episode)
         if entropy_coef:
-            writer.add_scalar("Loss/Entropy Term", entropy_term.item(), i_episode)
-        # Policy stats FIXME: log mean and std from copute_returns
-        writer.add_scalar("Policy/Return Mean", ret_mean.item(), i_episode)
-        writer.add_scalar("Policy/Return STD", ret_std.item(), i_episode)
+            mlflow.log_metric("loss/entropy_term", entropy_term.item(), step=i_episode)
+        # Policy stats
+        mlflow.log_metric("policy/return_mean", ret_mean.item(), step=i_episode)
+        mlflow.log_metric("policy/return_std", ret_std.item(), step=i_episode)
         if "episode" in info:
-            writer.add_scalar("Episode/Reward", info["episode"]["r"], i_episode)
-            writer.add_scalar("Episode/Length", info["episode"]["l"], i_episode)
-            writer.add_scalar("Episode/Duration", info["episode"]["t"], i_episode)
+            mlflow.log_metric("episode/reward", info["episode"]["r"], step=i_episode)
+            mlflow.log_metric("episode/length", info["episode"]["l"], step=i_episode)
+            mlflow.log_metric("episode/duration", info["episode"]["t"], step=i_episode)
 
     return loss, sum(rewards), entropy_term
 
@@ -332,74 +377,66 @@ def train(config_path: str = "train_config.yaml"):
     env.reset(seed=cfg.seed)
 
     # Set up policy model
-    if cfg.load_model_path and os.path.exists(cfg.load_model_path):
-        policy = load_model_with_metadata(
-            cfg.load_model_path, FlappyBirdStatePolicy, device
-        )[0]
-        print(f"Loaded model from {cfg.load_model_path}")
-    else:
-        policy = FlappyBirdStatePolicy().to(device)
-
+    policy = prepare_policy_model(cfg.load_model_path, device)
     optimizer = optim.Adam(policy.parameters(), lr=cfg.learning_rate)
-
     # Set up LR scheduler to decay from initial to target learning rate by the end of training
     gamma = (cfg.target_learning_rate / cfg.learning_rate) ** (1 / cfg.n_episodes)
     scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
 
-    writer = SummaryWriter(
-        f"logs/run_lr{cfg.learning_rate:.2e}_ec{cfg.entropy_coeff:.2e}"
-    )
     print("\nTraining Flappy with REINFORCE...\n")
     print(OmegaConf.to_yaml(cfg))
-    for i_episode in range(cfg.n_episodes):
-        loss, summed_reward, entropy_term = reinforce_episode(
-            policy, env, cfg.gamma, cfg.entropy_coeff, writer
-        )
 
-        # Scale loss for gradient accumulation if batching
-        if batching:
-            loss /= cfg.batch_size
-            entropy_term /= cfg.batch_size
-
-        # Compute gradients: accumulates if batching
-        loss.backward()
-
-        if i_episode % cfg.print_every == cfg.print_every - 1:
-            print(
-                f"Episode {i_episode + 1:> 6d} | Reward Sum: {summed_reward:> 10.4f} | "
-                f"Loss: {loss.item():> 10.4f} | Entropy: {entropy_term.item():> .2e} | "
-                f"LR: {scheduler.get_last_lr()[0]:> .4e}"
+    mlflow.pytorch.autolog()
+    mlflow.set_experiment(experiment_name="flappybird_reinforce_hparam_tuning")
+    with mlflow.start_run(run_name=make_run_name(cfg)):
+        for i_episode in range(cfg.n_episodes):
+            loss, summed_reward, entropy_term = reinforce_episode(
+                policy, env, cfg.gamma, cfg.entropy_coeff, log_metrics=True
             )
 
-        # Episode batching: average loss over several episodes and update only once
-        if not batching or (i_episode + 1) % cfg.batch_size == 0:
-            # Gradient clipping
-            if grad_clipping:
-                torch.nn.utils.clip_grad_norm_(
-                    policy.parameters(), max_norm=cfg.max_grad_norm
+            # Scale loss for gradient accumulation if batching
+            if batching:
+                loss /= cfg.batch_size
+                entropy_term /= cfg.batch_size
+
+            # Compute gradients: accumulates if batching
+            loss.backward()
+
+            if i_episode % cfg.print_every == cfg.print_every - 1:
+                print(
+                    f"Episode {i_episode + 1:> 6d} | Reward Sum: {summed_reward:> 10.4f} | "
+                    f"Loss: {loss.item():> 10.4f} | Entropy: {entropy_term.item():> .2e} | "
+                    f"LR: {scheduler.get_last_lr()[0]:> .4e}"
                 )
 
-            if writer:
-                writer.add_scalar(
-                    "Policy/Gradient Norm", gradient_norm(policy), i_episode
+            # Episode batching: average loss over several episodes and update only once
+            if not batching or (i_episode + 1) % cfg.batch_size == 0:
+                # Gradient clipping
+                if grad_clipping:
+                    torch.nn.utils.clip_grad_norm_(
+                        policy.parameters(), max_norm=cfg.max_grad_norm
+                    )
+
+                mlflow.log_metric(
+                    "policy/gradient_norm", gradient_norm(policy), step=i_episode
                 )
 
-            # Update parameters and clear gradients
-            optimizer.step()
-            scheduler.step()
-            optimizer.zero_grad()
+                # Update parameters and clear gradients
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
 
-    # Log hyperparameters and summary metrics
-    buffer_size = env.get_wrapper_attr("return_queue").maxlen
-    writer.add_hparams(
-        hparam_dict={**cfg},
-        metric_dict={f"max_reward_last_{buffer_size}_episodes": max(env.return_queue)},
-    )
+        # Log hyperparameters and summary metrics
+        return_queue = env.get_wrapper_attr("return_queue")
+        buffer_size = return_queue.maxlen
+        mlflow.log_metric(f"max_reward_last_{buffer_size}_episodes", max(return_queue))
+        mlflow.log_params({**cfg})
 
-    writer.close()
-    env.close()
+        env.close()
 
-    if cfg.save_model_path is not None:
+        # TODO: replace with mlflow alternative
+        # mlflow.pytorch.save_model(policy, cfg.save_model_path)
+        # mlflow.pytorch.log_model(policy, "model")
         save_model_with_metadata(cfg.save_model_path, policy, **cfg)
 
 
@@ -415,12 +452,10 @@ def eval(
     """Evaluate the policy."""
     cfg = load_config(config_path)
 
-    policy, meta = load_model_with_metadata(
+    policy, _ = load_model_with_metadata(
         cfg.load_model_path, FlappyBirdStatePolicy, device
     )
-    print(
-        f"Evaluating policy loaded from {cfg.load_model_path} with metadata:\n {meta}"
-    )
+    print("Evaluating policy...")
 
     env = make_env(
         cfg.env_id,
