@@ -121,7 +121,7 @@ class FlappyBirdStatePolicy(nn.Module):
 
         # convert probs to a categorical distribution and sample the action from it
         dist = Categorical(logits=logits)
-        action = dist.sample() if not deterministic else dist.mode.item()
+        action = dist.sample() if not deterministic else dist.mode
         # return the action and its log probability under categorical distribution
         return action, dist.log_prob(action), logits
 
@@ -427,30 +427,30 @@ def eval(
         record_stats=True,
         max_episode_steps=cfg.max_episode_steps,
         video_folder="videos/eval",
-        # episode_trigger=lambda e: e in (1, 3, 7, 9),
+        episode_trigger=lambda e: True,
         use_lidar=False,
     )
 
-    # TODO: with torch.no_grad():
-    episode_rewards = []
-    for episode in range(cfg.n_episodes):
-        # Each episode has predictable seed for reproducible evaluation
-        # making sure policy can cope with env stochasticity
-        state, _ = env.reset(seed=cfg.seed + episode)
-        done = False
-        while not done:
-            action, _, _ = policy.act(state, deterministic=not stochastic)
-            state, reward, terminated, truncated, info = env.step(action.item())
-            done = terminated or truncated
+    with torch.no_grad():
+        episode_rewards = []
+        for episode in range(cfg.n_episodes):
+            # Each episode has predictable seed for reproducible evaluation
+            # making sure policy can cope with env stochasticity
+            state, _ = env.reset(seed=cfg.seed + episode)
+            done = False
+            while not done:
+                action, _, _ = policy.act(state, deterministic=not stochastic)
+                state, reward, terminated, truncated, info = env.step(action.item())
+                done = terminated or truncated
 
-        # Extract episode statistics from info (available after episode ends)
-        if "episode" in info:
-            episode_reward = info["episode"]["r"][0]
-            episode_length = info["episode"]["l"][0]
-            episode_rewards.append(episode_reward)
-            print(
-                f"Episode {episode + 1} | Reward: {episode_reward:.2f} | Length: {episode_length}"
-            )
+            # Extract episode statistics from info (available after episode ends)
+            if "episode" in info:
+                episode_reward = info["episode"]["r"][0]
+                episode_length = info["episode"]["l"][0]
+                episode_rewards.append(episode_reward)
+                print(
+                    f"Episode {episode + 1} | Reward: {episode_reward:.2f} | Length: {episode_length}"
+                )
 
     if episode_rewards:
         mean_reward = np.mean(episode_rewards)
