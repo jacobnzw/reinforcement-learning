@@ -25,7 +25,6 @@ app = typer.Typer()
 # MLflow setup
 mlflow.set_tracking_uri("http://localhost:5000")  # default mlflow server host:port
 mlflow.set_experiment(experiment_name="flappybird_reinforce_hparam_tuning")
-mlflow.pytorch.autolog()
 
 
 class FlappyBirdImagePolicy(nn.Module):
@@ -141,46 +140,6 @@ def load_config(config_path: Path) -> DictConfig:
     return cfg
 
 
-def save_model_with_metadata(filepath: str, model, **metadata):
-    """Save model with metadata safely."""
-
-    if filepath is None:
-        print("No filepath provided. Model not saved.")
-        return
-
-    print(f"Saving model to {filepath}...")
-
-    save_dict = {
-        "model_state_dict": model.state_dict(),
-        "model_class": model.__class__.__name__,
-        "metadata": metadata,
-    }
-    Path(filepath).parent.mkdir(parents=True, exist_ok=True)
-    torch.save(save_dict, filepath)
-
-
-def load_model_with_metadata(filepath: str, model_class, device=None):
-    """Load model with metadata safely."""
-    if filepath is None or not Path(filepath).exists():
-        raise FileNotFoundError(f"Model file not found at {filepath}")
-
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Load with weights_only=True for security
-    checkpoint = torch.load(filepath, weights_only=True, map_location=device)
-
-    # Create new model instance
-    model = model_class().to(device)
-    model.load_state_dict(checkpoint["model_state_dict"])
-
-    print(
-        f"Loaded policy model from {filepath} with metadata: {checkpoint['metadata']}"
-    )
-
-    return model, checkpoint["metadata"]
-
-
 def log_config_to_mlflow(config):
     """Log config to MLflow."""
 
@@ -291,12 +250,13 @@ def make_run_name(cfg):
     return name
 
 
-def prepare_policy_model(load_model_path, device):
-    if load_model_path is not None and Path(load_model_path).exists():
-        return load_model_with_metadata(load_model_path, FlappyBirdStatePolicy, device)[
-            0
-        ]
+def prepare_policy_model(run_id=None, device=None):
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if run_id:
+        return load_model_with_mlflow(run_id, FlappyBirdStatePolicy, device)
     else:
+        print("No run ID provided. Creating new model.")
         return FlappyBirdStatePolicy().to(device)
 
 
@@ -415,7 +375,12 @@ def reinforce_episode(
 
 
 @app.command()
-def train(config_path: str = "train_config.yaml"):
+def train(
+    config_path: str = typer.Option(
+        "train_config.yaml", help="Path to training config file"
+    ),
+    run_id: str = typer.Option(None, "-r", "--run-id", help="MLflow run ID"),
+):
     """Train using REINFORCE algorithm. A basic policy gradient method."""
 
     cfg = load_config(config_path)
@@ -438,7 +403,7 @@ def train(config_path: str = "train_config.yaml"):
     env.reset(seed=cfg.seed)
 
     # Set up policy model
-    policy = prepare_policy_model(cfg.load_model_path, device)
+    policy = prepare_policy_model(run_id, device)
     optimizer = optim.Adam(policy.parameters(), lr=cfg.learning_rate)
     # Set up LR scheduler to decay from initial to target learning rate by the end of training
     gamma = (cfg.target_learning_rate / cfg.learning_rate) ** (1 / cfg.n_episodes)
@@ -447,7 +412,7 @@ def train(config_path: str = "train_config.yaml"):
     with mlflow.start_run(run_name=make_run_name(cfg)) as run:
         print("\nTraining Flappy with REINFORCE...\n")
         print(OmegaConf.to_yaml(cfg))
-        print(f"\nMLflow RUN ID: {run.info.run_id}")
+        print(f"MLflow RUN ID: {run.info.run_id}\n")
 
         log_config_to_mlflow(cfg)
 
@@ -492,9 +457,6 @@ def train(config_path: str = "train_config.yaml"):
         return_queue = env.get_wrapper_attr("return_queue")
         buffer_size = return_queue.maxlen
         mlflow.log_metric(f"max_reward_last_{buffer_size}_episodes", max(return_queue))
-        # mlflow.log_params({**cfg})
-
-        # save_model_with_metadata(cfg.save_model_path, policy, **cfg)
         save_model_with_mlflow(policy)
 
         env.close()
@@ -513,10 +475,7 @@ def eval(
     """Evaluate the policy."""
     cfg = load_config(config_path)
 
-    # policy, _ = load_model_with_metadata(
-    #     cfg.load_model_path, FlappyBirdStatePolicy, device
-    # )
-    policy = load_model_with_mlflow(run_id, device)
+    policy = load_model_with_mlflow(run_id, device=device)
     print("Evaluating policy...")
 
     env = make_env(
