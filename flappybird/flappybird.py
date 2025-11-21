@@ -22,7 +22,10 @@ from utils import push_to_hub, record_video  # noqa: F401
 device = torch.accelerator.current_accelerator()
 app = typer.Typer()
 
-# TODO: add tensorboard logging
+# MLflow setup
+mlflow.set_tracking_uri("http://localhost:5000")  # default mlflow server host:port
+mlflow.set_experiment(experiment_name="flappybird_reinforce_hparam_tuning")
+mlflow.pytorch.autolog()
 
 
 class FlappyBirdImagePolicy(nn.Module):
@@ -97,12 +100,14 @@ class FlappyBirdStatePolicy(nn.Module):
       - player's rotation
     """
 
+    state_dim = 12
+
     # TODO: FrameStack could be optional
-    def __init__(self, state_dim=12, hidden_dim=64, action_dim=2):
+    def __init__(self, hidden_dim=64, action_dim=2):
         super(FlappyBirdStatePolicy, self).__init__()
 
         self.fc_stack = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim),
+            nn.Linear(self.state_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
@@ -174,6 +179,62 @@ def load_model_with_metadata(filepath: str, model_class, device=None):
     )
 
     return model, checkpoint["metadata"]
+
+
+def log_config_to_mlflow(config):
+    """Log config to MLflow."""
+
+    HPARAM_KEYS = [
+        "gamma",
+        "entropy_coeff",
+        "learning_rate",
+        "target_learning_rate",
+        "batch_size",
+        "max_grad_norm",
+    ]
+    TAG_KEYS = ["env_id", "n_episodes", "seed"]
+
+    # Log the full set of hyperparameters
+    for key in HPARAM_KEYS:
+        mlflow.log_param(key, config.get(key))
+
+    # Log the rest as descriptive tags (Context)
+    for key in TAG_KEYS:
+        # Tags must be strings, and are great for searching/filtering
+        mlflow.set_tag(key, str(config.get(key)))
+
+
+def save_model_with_mlflow(model, model_name="flappybird_reinforce"):
+    """Saves model using MLflow.
+
+    Model move to CPU prior to saving for compatibility.
+    """
+
+    # Log the model (Model Artifact)
+    model_info = mlflow.pytorch.log_model(
+        pytorch_model=model.cpu(),
+        input_example=np.random.rand(1, FlappyBirdStatePolicy.state_dim).astype(
+            np.float32
+        ),  # infers model signature automatically
+        name=model_name,
+        registered_model_name=model_name,
+    )
+
+    print(f"\nModel saved at URI: {model_info.model_uri}")
+    print(f"RUN ID: {model_info.run_id}")
+
+
+def load_model_with_mlflow(run_id, model_name="flappybird_reinforce", device=None):
+    """Load model from MLflow."""
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Load model from MLflow
+    model_uri = f"runs:/{run_id}/{model_name}"
+    model = mlflow.pytorch.load_model(model_uri, map_location=device)
+
+    print(f"Loaded model from MLflow URI: {model_uri}")
+    return model
 
 
 def make_env(
@@ -383,12 +444,13 @@ def train(config_path: str = "train_config.yaml"):
     gamma = (cfg.target_learning_rate / cfg.learning_rate) ** (1 / cfg.n_episodes)
     scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
 
-    print("\nTraining Flappy with REINFORCE...\n")
-    print(OmegaConf.to_yaml(cfg))
+    with mlflow.start_run(run_name=make_run_name(cfg)) as run:
+        print("\nTraining Flappy with REINFORCE...\n")
+        print(OmegaConf.to_yaml(cfg))
+        print(f"\nMLflow RUN ID: {run.info.run_id}")
 
-    mlflow.pytorch.autolog()
-    mlflow.set_experiment(experiment_name="flappybird_reinforce_hparam_tuning")
-    with mlflow.start_run(run_name=make_run_name(cfg)):
+        log_config_to_mlflow(cfg)
+
         for i_episode in range(cfg.n_episodes):
             loss, summed_reward, entropy_term = reinforce_episode(
                 policy, env, cfg.gamma, cfg.entropy_coeff, log_metrics=True
@@ -430,14 +492,12 @@ def train(config_path: str = "train_config.yaml"):
         return_queue = env.get_wrapper_attr("return_queue")
         buffer_size = return_queue.maxlen
         mlflow.log_metric(f"max_reward_last_{buffer_size}_episodes", max(return_queue))
-        mlflow.log_params({**cfg})
+        # mlflow.log_params({**cfg})
+
+        # save_model_with_metadata(cfg.save_model_path, policy, **cfg)
+        save_model_with_mlflow(policy)
 
         env.close()
-
-        # TODO: replace with mlflow alternative
-        # mlflow.pytorch.save_model(policy, cfg.save_model_path)
-        # mlflow.pytorch.log_model(policy, "model")
-        save_model_with_metadata(cfg.save_model_path, policy, **cfg)
 
 
 @app.command()
@@ -445,23 +505,25 @@ def eval(
     config_path: str = typer.Option(
         "eval_config.yaml", help="Evaluation config file path"
     ),
-    stochastic: bool = typer.Option(
-        False, "--stochastic", "-s", help="Whether to use stochastic policy"
+    run_id: str = typer.Option(..., "-r", "--run-id", help="MLflow run ID"),
+    no_record: bool = typer.Option(
+        False, "-n", "--no-record", help="Don't record videos"
     ),
 ):
     """Evaluate the policy."""
     cfg = load_config(config_path)
 
-    policy, _ = load_model_with_metadata(
-        cfg.load_model_path, FlappyBirdStatePolicy, device
-    )
+    # policy, _ = load_model_with_metadata(
+    #     cfg.load_model_path, FlappyBirdStatePolicy, device
+    # )
+    policy = load_model_with_mlflow(run_id, device)
     print("Evaluating policy...")
 
     env = make_env(
         cfg.env_id,
         record_stats=True,
         max_episode_steps=cfg.max_episode_steps,
-        video_folder="videos/eval",
+        video_folder="videos/eval" if not no_record else None,
         episode_trigger=lambda e: True,
         use_lidar=False,
     )
@@ -474,7 +536,7 @@ def eval(
             state, _ = env.reset(seed=cfg.seed + episode)
             done = False
             while not done:
-                action, _, _ = policy.act(state, deterministic=not stochastic)
+                action, _, _ = policy.act(state, deterministic=not cfg.stochastic)
                 state, reward, terminated, truncated, info = env.step(action.item())
                 done = terminated or truncated
 
