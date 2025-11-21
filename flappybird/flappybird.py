@@ -19,6 +19,10 @@ from torch.distributions import Categorical
 # from huggingface_sb3 import package_to_hub
 from utils import push_to_hub, record_video  # noqa: F401
 
+# TODO: refactor according to https://gymnasium.farama.org/tutorials/training_agents/mujoco_reinforce/
+# TODO: move helper funcs to utils; or delete utils completely
+# TODO: make upload to HF as another command
+
 device = torch.accelerator.current_accelerator()
 app = typer.Typer()
 
