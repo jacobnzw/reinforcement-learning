@@ -3,4 +3,3 @@ n_episodes: 20  # eval on this many episodes
 max_episode_steps: 10_000
 seed: 0  # different from training seed
 stochastic: false  # whether to use stochastic policy
-# load_model_path: models/flappybird_policy_e50k_g.95_llr2_b100.pt  # path to load the model from

@@ -8,7 +8,5 @@ target_learning_rate: 1e-4
 batch_size: 100  # 0 to disable gradient accumulation
 max_grad_norm: 0.0  # 0.0 to disable gradient clipping
 seed: 42
-# load_model_path: # models/flappybird_policy_e50k_g.95_llr2_b100.pt # loads this model and continues training when specified
-# save_model_path: # models/flappybird_policy_e50k_g.95_llr2_b100.pt  # path to save the model
 print_every: 250  # print after this many episodes
 record_every: 5000  # record video after this many episodes
