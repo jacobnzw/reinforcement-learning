@@ -402,6 +402,7 @@ def train(
     )
 
     # Set seeds for reproducibility
+    # TODO: training should be repeated over several seeds and average the results
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
     env.reset(seed=cfg.seed)
