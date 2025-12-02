@@ -411,6 +411,8 @@ Because most algorithms use exploration noise during training, you need a separa
 
 [Open AI Spining Up](https://spinningup.openai.com/en/latest/) Best for grasping the terminology, basic concepts and intuitions. For example, has best explained definition of the quality function Q and what it means to "... thereafter follow policy $\pi$", which I had trouble with initially.
 
+[CleanRL](https://docs.cleanrl.dev/) Explanatory clean implementations of RL algorithms. "Every detail about an algorithm variant is put into a single standalone file."
+
 [Yandex Practical RL](https://github.com/yandexdataschool/Practical_RL/tree/master) Didn't do it, but looks like it covers more advanced and cutting-endge topics. Is more self-led, requires more initiative and dedication (eg. reading a chapter in Sutton's book).
 
 [HuggingFace Deep RL Course](https://huggingface.co/learn/deep-rl-course/unit0/introduction) Low-maintainance, notebooks outdated with old dependencies, had to continously struggle with finding the right versions of libraries that work together.
