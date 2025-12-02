@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import typer
+import typer  # TODO: check out tyro?
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 from torch.distributions import Categorical
@@ -116,6 +116,7 @@ class FlappyBirdStatePolicy(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, action_dim),
         )
+        self.hidden_dim = hidden_dim
 
     def forward(self, x):
         return self.fc_stack(x)
@@ -154,6 +155,7 @@ def log_config_to_mlflow(config):
         "target_learning_rate",
         "batch_size",
         "max_grad_norm",
+        "hidden_dim",
     ]
     TAG_KEYS = ["env_id", "n_episodes", "seed"]
 
@@ -254,14 +256,14 @@ def make_run_name(cfg):
     return name
 
 
-def prepare_policy_model(run_id=None, device=None):
+def prepare_policy_model(cfg, run_id=None, device=None):
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if run_id:
         return load_model_with_mlflow(run_id, FlappyBirdStatePolicy, device)
     else:
         print("No run ID provided. Creating new model.")
-        return FlappyBirdStatePolicy().to(device)
+        return FlappyBirdStatePolicy(hidden_dim=cfg.hidden_dim).to(device)
 
 
 def compute_returns(rewards, gamma, normalize=True, device="cuda"):
@@ -378,6 +380,53 @@ def reinforce_episode(
     return loss, sum(rewards), entropy_term
 
 
+def train_loop(policy, env, optimizer, scheduler, cfg, seed):
+    torch.manual_seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    env.reset(seed=cfg.seed)
+
+    batching = cfg.batch_size is not None and cfg.batch_size > 1
+    grad_clipping = cfg.max_grad_norm is not None and cfg.max_grad_norm > 0.0
+
+    for i_episode in range(cfg.n_episodes):
+        log_episode = i_episode % cfg.log_every == cfg.log_every - 1
+        loss, summed_reward, entropy_term = reinforce_episode(
+            policy, env, cfg.gamma, cfg.entropy_coeff, log_metrics=log_episode
+        )
+
+        # Scale loss for gradient accumulation if batching
+        if batching:
+            loss /= cfg.batch_size
+            entropy_term /= cfg.batch_size
+
+        # Compute gradients: accumulates if batching
+        loss.backward()
+
+        if log_episode:
+            print(
+                f"Episode {i_episode + 1:> 6d} | Reward Sum: {summed_reward:> 10.4f} | "
+                f"Loss: {loss.item():> 10.4f} | Entropy: {entropy_term.item():> .2e} | "
+                f"LR: {scheduler.get_last_lr()[0]:> .4e}"
+            )
+
+        # Episode batching: average loss over several episodes and update only once
+        if not batching or (i_episode + 1) % cfg.batch_size == 0:
+            # Gradient clipping
+            if grad_clipping:
+                torch.nn.utils.clip_grad_norm_(
+                    policy.parameters(), max_norm=cfg.max_grad_norm
+                )
+
+            mlflow.log_metric(
+                "policy/gradient_norm", gradient_norm(policy), step=i_episode
+            )
+
+            # Update parameters and clear gradients
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
+
+
 @app.command()
 def train(
     config_path: str = typer.Option(
@@ -403,12 +452,14 @@ def train(
 
     # Set seeds for reproducibility
     # TODO: training should be repeated over several seeds and average the results
+    # This needs however, training one model per seed, averaging the results across models and saving the best one
+    # mlflow.start_run(nested=True) for child runs
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
     env.reset(seed=cfg.seed)
 
     # Set up policy model
-    policy = prepare_policy_model(run_id, device)
+    policy = prepare_policy_model(cfg, run_id, device)
     optimizer = optim.Adam(policy.parameters(), lr=cfg.learning_rate)
     # Set up LR scheduler to decay from initial to target learning rate by the end of training
     gamma = (cfg.target_learning_rate / cfg.learning_rate) ** (1 / cfg.n_episodes)
@@ -421,9 +472,14 @@ def train(
 
         log_config_to_mlflow(cfg)
 
+        # TODO: extract into train_loop(policy, env, optimizer, scheduler, cfg)
+        # for seed in cfg.seeds:
+        #     train_loop(policy, env, optimizer, scheduler, cfg, seed)
+
         for i_episode in range(cfg.n_episodes):
+            log_episode = i_episode % cfg.log_every == cfg.log_every - 1
             loss, summed_reward, entropy_term = reinforce_episode(
-                policy, env, cfg.gamma, cfg.entropy_coeff, log_metrics=True
+                policy, env, cfg.gamma, cfg.entropy_coeff, log_metrics=log_episode
             )
 
             # Scale loss for gradient accumulation if batching
@@ -434,7 +490,7 @@ def train(
             # Compute gradients: accumulates if batching
             loss.backward()
 
-            if i_episode % cfg.print_every == cfg.print_every - 1:
+            if log_episode:
                 print(
                     f"Episode {i_episode + 1:> 6d} | Reward Sum: {summed_reward:> 10.4f} | "
                     f"Loss: {loss.item():> 10.4f} | Entropy: {entropy_term.item():> .2e} | "
@@ -510,7 +566,7 @@ def eval(
                 episode_length = info["episode"]["l"][0]
                 episode_rewards.append(episode_reward)
                 print(
-                    f"Episode {episode + 1} | Reward: {episode_reward:.2f} | Length: {episode_length}"
+                    f"Episode {episode:> 6d} | Reward: {episode_reward:> 6.2f} | Length: {episode_length:> 6d}"
                 )
 
     if episode_rewards:
