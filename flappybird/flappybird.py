@@ -462,7 +462,8 @@ def train(
     policy = prepare_policy_model(cfg, run_id, device)
     optimizer = optim.Adam(policy.parameters(), lr=cfg.learning_rate)
     # Set up LR scheduler to decay from initial to target learning rate by the end of training
-    gamma = (cfg.target_learning_rate / cfg.learning_rate) ** (1 / cfg.n_episodes)
+    n_scheduler_steps = cfg.n_episodes // cfg.batch_size if batching else cfg.n_episodes
+    gamma = (cfg.target_learning_rate / cfg.learning_rate) ** (1 / n_scheduler_steps)
     scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
 
     with mlflow.start_run(run_name=make_run_name(cfg)) as run:
@@ -495,6 +496,9 @@ def train(
                     f"Episode {i_episode + 1:> 6d} | Reward Sum: {summed_reward:> 10.4f} | "
                     f"Loss: {loss.item():> 10.4f} | Entropy: {entropy_term.item():> .2e} | "
                     f"LR: {scheduler.get_last_lr()[0]:> .4e}"
+                )
+                mlflow.log_metric(
+                    "policy/learning_rate", scheduler.get_last_lr()[0], step=i_episode
                 )
 
             # Episode batching: average loss over several episodes and update only once
