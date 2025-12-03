@@ -128,12 +128,12 @@ class FlappyBirdStatePolicy(nn.Module):
 class ReinforceAgent:
     # TODO: decide on the class reposibilities
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, run_id=None):
         self.cfg = cfg
         self.batching = cfg.batch_size is not None and cfg.batch_size > 1
         self.grad_clipping = cfg.max_grad_norm is not None and cfg.max_grad_norm > 0.0
 
-        self.policy_net = FlappyBirdStatePolicy()
+        self.policy_net = prepare_policy_model(cfg, run_id)
         self.optimizer = optim.AdamW(self.policy_net.parameters(), lr=cfg.learning_rate)
         # Set up LR scheduler to decay from initial to target learning rate by the end of training
         n_scheduler_steps = (
@@ -168,7 +168,7 @@ class ReinforceAgent:
     def observe(self, reward):
         self.rewards.append(reward)
 
-    def episode_loss(self, log_metrics=True):
+    def update(self, log_metrics=True):
         """Update the policy network's weights based on episode history."""
 
         # TODO: how to do episode batching?
@@ -200,6 +200,12 @@ class ReinforceAgent:
             else 0.0
         )
         loss += entropy_term
+        loss.backward()
+
+        # Update parameters and clear gradients
+        self.optimizer.step()
+        self.scheduler.step()
+        self.optimizer.zero_grad()
 
         summed_reward = sum(self.rewards)
         # Clear history buffers
@@ -248,11 +254,23 @@ def collect_episode(
 
         episode_over = terminated or truncated
 
-    loss, summed_reward, entropy_term, ret_mean, ret_std = agent.episode_loss()
+    # loss, summed_reward, entropy_term, ret_mean, ret_std = agent.episode_loss()
 
+    # NOTE: a bit problematic here, because we won't have loss until agent.update(),
+    # so logging only doable at the frequency of update,
+    # UNLESS? we trigger loss compute in the agent after each episode, quite the pain though just for printing!
     if log_metrics:
         # present if env is wrapped in RecordEpisodeStatistics
         i_episode = env.get_wrapper_attr("episode_count")
+
+        print(
+            f"Episode {i_episode + 1:> 6d} | Reward Sum: {summed_reward:> 10.4f} | "
+            f"Loss: {loss.item():> 10.4f} | Entropy: {entropy_term.item():> .2e} | "
+            f"LR: {agent.scheduler.get_last_lr()[0]:> .4e}"
+        )
+        mlflow.log_metric(
+            "policy/learning_rate", agent.scheduler.get_last_lr()[0], step=i_episode
+        )
 
         mlflow.log_metric("loss/total", loss.item(), step=i_episode)
         if cfg.entropy_coeff:
@@ -598,12 +616,12 @@ def train(
     env.reset(seed=cfg.seed)
 
     # Set up policy model
-    policy = prepare_policy_model(cfg, run_id, device)
-    optimizer = optim.AdamW(policy.parameters(), lr=cfg.learning_rate)
-    # Set up LR scheduler to decay from initial to target learning rate by the end of training
-    n_scheduler_steps = cfg.n_episodes // cfg.batch_size if batching else cfg.n_episodes
-    gamma = (cfg.target_learning_rate / cfg.learning_rate) ** (1 / n_scheduler_steps)
-    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
+    # policy = prepare_policy_model(cfg, run_id, device)
+    # optimizer = optim.Adam(policy.parameters(), lr=cfg.learning_rate)
+    # # Set up LR scheduler to decay from initial to target learning rate by the end of training
+    # n_scheduler_steps = cfg.n_episodes // cfg.batch_size if batching else cfg.n_episodes
+    # gamma = (cfg.target_learning_rate / cfg.learning_rate) ** (1 / n_scheduler_steps)
+    # scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
 
     with mlflow.start_run(run_name=make_run_name(cfg)) as run:
         print("\nTraining Flappy with REINFORCE...\n")
@@ -618,27 +636,28 @@ def train(
 
         for i_episode in range(cfg.n_episodes):
             log_episode = i_episode % cfg.log_every == cfg.log_every - 1
-            loss, summed_reward, entropy_term = reinforce_episode(
-                policy, env, cfg, log_metrics=log_episode
-            )
+            collect_episode(agent, env, cfg, log_metrics=log_episode)
+            # loss, summed_reward, entropy_term = reinforce_episode(
+            #     policy, env, cfg, log_metrics=log_episode
+            # )
 
-            # Scale loss for gradient accumulation if batching
-            if batching:
-                loss /= cfg.batch_size
-                entropy_term /= cfg.batch_size
+            # # Scale loss for gradient accumulation if batching
+            # if batching:
+            #     loss /= cfg.batch_size
+            #     entropy_term /= cfg.batch_size
 
-            # Compute gradients: accumulates if batching
-            loss.backward()
+            # # Compute gradients: accumulates if batching
+            # loss.backward()
 
-            if log_episode:
-                print(
-                    f"Episode {i_episode + 1:> 6d} | Reward Sum: {summed_reward:> 10.4f} | "
-                    f"Loss: {loss.item():> 10.4f} | Entropy: {entropy_term.item():> .2e} | "
-                    f"LR: {scheduler.get_last_lr()[0]:> .4e}"
-                )
-                mlflow.log_metric(
-                    "policy/learning_rate", scheduler.get_last_lr()[0], step=i_episode
-                )
+            # if log_episode:
+            #     print(
+            #         f"Episode {i_episode + 1:> 6d} | Reward Sum: {summed_reward:> 10.4f} | "
+            #         f"Loss: {loss.item():> 10.4f} | Entropy: {entropy_term.item():> .2e} | "
+            #         f"LR: {scheduler.get_last_lr()[0]:> .4e}"
+            #     )
+            #     mlflow.log_metric(
+            #         "policy/learning_rate", scheduler.get_last_lr()[0], step=i_episode
+            #     )
 
             # Episode batching: average loss over several episodes and update only once
             if not batching or (i_episode + 1) % cfg.batch_size == 0:
@@ -652,10 +671,8 @@ def train(
                     "policy/gradient_norm", gradient_norm(policy), step=i_episode
                 )
 
-                # Update parameters and clear gradients
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad()
+                # Agent has collected enough experience to learn, do a policy update
+                agent.update()
 
         # Log hyperparameters and summary metrics
         return_queue = env.get_wrapper_attr("return_queue")
