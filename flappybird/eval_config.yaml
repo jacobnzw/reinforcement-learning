@@ -1,5 +1,0 @@
-env_id: FlappyBird-v0
-n_episodes: 20  # eval on this many episodes
-max_episode_steps: 10_000
-seed: 0  # different from training seed
-stochastic: false  # whether to use stochastic policy
