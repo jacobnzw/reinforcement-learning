@@ -105,18 +105,20 @@ class FlappyBirdStatePolicy(nn.Module):
     """
 
     state_dim = 12
+    action_dim = 2
 
-    # TODO: FrameStack could be optional
-    def __init__(self, hidden_dim=64, action_dim=2):
+    def __init__(self, hidden_dim=64, frame_stack=1):
         super(FlappyBirdStatePolicy, self).__init__()
 
+        input_dim = self.state_dim * frame_stack
         self.fc_stack = nn.Sequential(
-            nn.Linear(self.state_dim, hidden_dim),
+            nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, action_dim),
+            nn.Linear(hidden_dim, self.action_dim),
         )
+        self.input_dim = input_dim
         self.hidden_dim = hidden_dim
 
     def forward(self, x):
