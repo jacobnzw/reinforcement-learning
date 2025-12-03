@@ -144,10 +144,15 @@ class ReinforceAgent:
         )
         self.scheduler = optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=gamma)
 
-        # history buffers
+        # episode history buffers
         self.log_probs = []
         self.logits = []
         self.rewards = []
+
+        # batch history buffers
+        self.batch_log_probs = []
+        self.batch_logits = []
+        self.batch_returns = []
 
     def act(self, state, deterministic=False):
         """Select an action given the state."""
@@ -165,29 +170,37 @@ class ReinforceAgent:
         # return the action and its log probability under categorical distribution
         return action
 
-    def observe(self, reward):
+    def observe(self, reward, episode_end=False):
         self.rewards.append(reward)
+        # TODO: We might compute episode-wise loss tensor and stuff them into dedicated batch buffer,
+        # then average them and call .backward() in update()
+        if episode_end:
+            # Compute and store the returns
+            returns = compute_returns(
+                self.rewards, self.cfg.gamma, normalize=False, device=device
+            )
+            self.batch_returns.append(returns)
+            self.batch_log_probs.append(self.log_probs)
+            self.batch_logits.append(self.logits)
+            # Clear the episode buffers
+            self.rewards = []
+            self.log_probs = []
+            self.logits = []
+
+        # TODO: Consider returning the rewards before clearing for collect_episode to log
 
     def update(self, log_metrics=True):
         """Update the policy network's weights based on episode history."""
 
-        # TODO: how to do episode batching?
-        # if client code calls observe over several episodes the buffers will contain rewards from all episodes
-        # thus making it easy to compute episode-batched baseline (mean, std) for the returns!
-        # Probably no need for gradient accumulation then, because the loss will be computed from the whole batch.
-        # This func could thus be renamed to update() and called once we have a full batch
-        # (or just one episode; depends on the client code)
-        # TODO: BUT we need to pay attention to discounting gamma in compute_returns, appending rewards from all episodes
-        # will make the returns from later episodes be discounted more than they should be. We need to be aware of
-        # returns coming from different episodes.
-        # Could generalize compute_returns to accept multiple sequences of rewards, compute return sequence
-        # for each and then normalize.
-
         # Calculate the (discounted) returns for each time step
-        returns, ret_mean, ret_std = compute_returns(
-            self.rewards, self.cfg.gamma, normalize=True, device=device
-        )
+        # returns, ret_mean, ret_std = compute_returns(
+        #     self.rewards, self.cfg.gamma, normalize=True, device=device
+        # )
 
+        # Stack the batch returns and normalize them
+        returns = torch.stack(self.batch_returns)
+        returns_mean, returns_std = returns.mean(), returns.std()
+        returns = (returns - returns_mean) / (returns_std + 1e-8)
         # Calculate the policy loss
         # torch.stack and @ preserve gradients (doesn't break computation graph as opposed to torch.tensor and .dot())
         loss = -torch.stack(self.log_probs).T @ returns
@@ -195,11 +208,14 @@ class ReinforceAgent:
         # Add the entropy term if specified
         entropy_term = (
             self.cfg.entropy_coeff
-            * Categorical(logits=torch.stack(self.logits)).entropy().sum()
+            * Categorical(logits=torch.stack(self.batch_logits)).entropy().sum()
             if self.cfg.entropy_coeff
             else 0.0
         )
         loss += entropy_term
+        loss /= len(
+            self.batch_returns
+        )  # average loss over the episode batch; divide by 1 if not batching
         loss.backward()
 
         # Update parameters and clear gradients
@@ -207,13 +223,15 @@ class ReinforceAgent:
         self.scheduler.step()
         self.optimizer.zero_grad()
 
-        summed_reward = sum(self.rewards)
+        # TODO: decide whether to even compute this
+        # summed_reward = sum(self.rewards)
+
         # Clear history buffers
         self.log_probs = []
         self.logits = []
         self.rewards = []
 
-        return loss, summed_reward, entropy_term, ret_mean, ret_std
+        return loss, summed_reward, entropy_term, returns_mean, returns_std
 
 
 def collect_episode(
@@ -249,16 +267,16 @@ def collect_episode(
     episode_over = False
     while not episode_over:  # expecting env.spec.max_episode_steps is not None
         action = agent.act(state)
-        state, reward, terminated, truncated, info = env.step(action.item())
-        agent.observe(reward)
 
+        state, reward, terminated, truncated, info = env.step(action.item())
         episode_over = terminated or truncated
 
-    # loss, summed_reward, entropy_term, ret_mean, ret_std = agent.episode_loss()
+        agent.observe(reward, episode_over)
 
     # NOTE: a bit problematic here, because we won't have loss until agent.update(),
-    # so logging only doable at the frequency of update,
+    # so logging only doable at the frequency of model updates.
     # UNLESS? we trigger loss compute in the agent after each episode, quite the pain though just for printing!
+    # TODO: return data and move logging to train() loop?
     if log_metrics:
         # present if env is wrapped in RecordEpisodeStatistics
         i_episode = env.get_wrapper_attr("episode_count")
@@ -637,17 +655,6 @@ def train(
         for i_episode in range(cfg.n_episodes):
             log_episode = i_episode % cfg.log_every == cfg.log_every - 1
             collect_episode(agent, env, cfg, log_metrics=log_episode)
-            # loss, summed_reward, entropy_term = reinforce_episode(
-            #     policy, env, cfg, log_metrics=log_episode
-            # )
-
-            # # Scale loss for gradient accumulation if batching
-            # if batching:
-            #     loss /= cfg.batch_size
-            #     entropy_term /= cfg.batch_size
-
-            # # Compute gradients: accumulates if batching
-            # loss.backward()
 
             # if log_episode:
             #     print(
@@ -662,6 +669,7 @@ def train(
             # Episode batching: average loss over several episodes and update only once
             if not batching or (i_episode + 1) % cfg.batch_size == 0:
                 # Gradient clipping
+                # TODO: move to agent?
                 if grad_clipping:
                     torch.nn.utils.clip_grad_norm_(
                         policy.parameters(), max_norm=cfg.max_grad_norm
@@ -678,6 +686,7 @@ def train(
         return_queue = env.get_wrapper_attr("return_queue")
         buffer_size = return_queue.maxlen
         mlflow.log_metric(f"max_reward_last_{buffer_size}_episodes", max(return_queue))
+        # TODO: save the whole agent?
         save_model_with_mlflow(policy)
 
         env.close()
