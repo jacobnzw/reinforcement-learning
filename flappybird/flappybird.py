@@ -1,7 +1,7 @@
 from collections import deque
 from pathlib import Path
 from typing import Callable
-
+import random
 import flappy_bird_gymnasium  # noqa: F401
 import gymnasium as gym
 import mlflow
@@ -302,8 +302,7 @@ def gradient_norm(model):
 def reinforce_episode(
     policy,
     env,
-    gamma,
-    entropy_coef: float | None = None,
+    cfg,
     log_metrics: bool = True,
 ):
     """Unroll the policy in the environment for one episode and compute the loss.
@@ -319,8 +318,7 @@ def reinforce_episode(
     Args:
         policy (FlappyBirdStatePolicy): Policy network
         env (gymnasium.Env): Environment
-        gamma (float): Discount factor
-        entropy_coef (float | None): Entropy coefficient. If None, no entropy term is added to the loss.
+        cfg (DictConfig): Training config
         log_metrics (bool): Whether to log metrics to MLflow
     """
     if env.spec.max_episode_steps is None:
@@ -333,7 +331,7 @@ def reinforce_episode(
     rewards = []
 
     # Collect trajectory: run the whole episode
-    state, _ = env.reset()
+    state, _ = env.reset(seed=cfg.seed)
     episode_over = False
     while not episode_over:  # expecting env.spec.max_episode_steps is not None
         action, log_prob, dist_logit = policy.act(state)
@@ -347,7 +345,7 @@ def reinforce_episode(
 
     # Calculate the (discounted) returns for each time step
     returns, ret_mean, ret_std = compute_returns(
-        rewards, gamma, normalize=True, device=device
+        rewards, cfg.gamma, normalize=True, device=device
     )
 
     # Calculate the policy loss
@@ -356,8 +354,8 @@ def reinforce_episode(
 
     # Add the entropy term if specified
     entropy_term = (
-        entropy_coef * Categorical(logits=torch.stack(logits)).entropy().sum()
-        if entropy_coef
+        cfg.entropy_coeff * Categorical(logits=torch.stack(logits)).entropy().sum()
+        if cfg.entropy_coeff
         else 0.0
     )
     loss += entropy_term
@@ -367,7 +365,7 @@ def reinforce_episode(
         i_episode = env.get_wrapper_attr("episode_count")
 
         mlflow.log_metric("loss/total", loss.item(), step=i_episode)
-        if entropy_coef:
+        if cfg.entropy_coeff:
             mlflow.log_metric("loss/entropy_term", entropy_term.item(), step=i_episode)
         # Policy stats
         mlflow.log_metric("policy/return_mean", ret_mean.item(), step=i_episode)
@@ -454,6 +452,7 @@ def train(
     # TODO: training should be repeated over several seeds and average the results
     # This needs however, training one model per seed, averaging the results across models and saving the best one
     # mlflow.start_run(nested=True) for child runs
+    random.seed(cfg.seed)
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
     env.reset(seed=cfg.seed)
@@ -480,7 +479,7 @@ def train(
         for i_episode in range(cfg.n_episodes):
             log_episode = i_episode % cfg.log_every == cfg.log_every - 1
             loss, summed_reward, entropy_term = reinforce_episode(
-                policy, env, cfg.gamma, cfg.entropy_coeff, log_metrics=log_episode
+                policy, env, cfg, log_metrics=log_episode
             )
 
             # Scale loss for gradient accumulation if batching
