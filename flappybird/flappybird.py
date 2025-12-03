@@ -1,7 +1,8 @@
+import random
 from collections import deque
 from pathlib import Path
 from typing import Callable
-import random
+
 import flappy_bird_gymnasium  # noqa: F401
 import gymnasium as gym
 import mlflow
@@ -444,7 +445,9 @@ def train(
         max_episode_steps=cfg.max_episode_steps,
         record_stats=True,
         video_folder="videos/train",
-        episode_trigger=lambda e: e % cfg.record_every == 0,
+        episode_trigger=lambda e: e % cfg.record_every == 0
+        if cfg.record_every
+        else None,
         use_lidar=False,
     )
 
