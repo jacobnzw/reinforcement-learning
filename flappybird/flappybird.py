@@ -459,7 +459,7 @@ def train(
 
     # Set up policy model
     policy = prepare_policy_model(cfg, run_id, device)
-    optimizer = optim.Adam(policy.parameters(), lr=cfg.learning_rate)
+    optimizer = optim.AdamW(policy.parameters(), lr=cfg.learning_rate)
     # Set up LR scheduler to decay from initial to target learning rate by the end of training
     n_scheduler_steps = cfg.n_episodes // cfg.batch_size if batching else cfg.n_episodes
     gamma = (cfg.target_learning_rate / cfg.learning_rate) ** (1 / n_scheduler_steps)
