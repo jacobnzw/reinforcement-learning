@@ -252,42 +252,6 @@ class ReinforceAgent:
         )
 
 
-def collect_episode(agent, env, seed):
-    """Unroll the policy in the environment for one episode and compute the loss.
-
-    The discounted returns at each timestep, are calculated as:
-
-        G_t = r_(t+1) + gamma*G_(t+1)
-
-    This follows a dynamic programming approach, with which we memorize solutions in order to avoid computing
-    them multiple times. We compute this starting from the last timestep to the first, in order to employ the formula
-    presented above and avoid redundant computations that would be needed if we were to do it from first to last.
-
-    Args:
-        policy (FlappyBirdStatePolicy): Policy network
-        env (gymnasium.Env): Environment
-        cfg (DictConfig): Training config
-        log_metrics (bool): Whether to log metrics to MLflow
-    """
-    if env.spec.max_episode_steps is None:
-        raise ValueError(
-            "Env must have a finite max episode length. Check if env is wrapped in TimeLimit."
-        )
-
-    # Collect trajectory: run the whole episode
-    state, _ = env.reset(seed=seed)
-    episode_over = False
-    while not episode_over:  # expecting env.spec.max_episode_steps is not None
-        action = agent.act(state)
-
-        state, reward, terminated, truncated, info = env.step(action.item())
-        episode_over = terminated or truncated
-
-        summed_reward = agent.observe(reward, episode_over)
-
-    return summed_reward, info
-
-
 def load_config(config_path: Path) -> DictConfig:
     """Load Hydra config from file."""
     # TODO: simplify hydra may be overkill here
@@ -420,7 +384,25 @@ def prepare_policy_model(cfg, run_id=None, device=None):
 
 
 def compute_returns(rewards, gamma, normalize=False, device="cuda"):
-    """Compute the returns from the rewards."""
+    """Compute the returns from the rewards.
+
+    The discounted returns at each timestep are calculated as:
+        G_t = r_(t+1) + gamma*G_(t+1)
+
+    This follows a dynamic programming approach, computing from the last timestep to the first
+    to avoid redundant computations.
+
+    Args:
+        rewards (list): List of rewards
+        gamma (float): Discount factor
+        normalize (bool): Whether to normalize the returns
+        device (str): Device to use for computation
+
+    Returns:
+        returns (torch.Tensor): Tensor of returns
+        mean (float): Mean of the returns (if normalize=True)
+        std (float): Standard deviation of the returns (if normalize=True)
+    """
 
     if gamma <= 0.0 or gamma > 1.0:
         raise ValueError(f"Invalid gamma: {gamma}. Should be in range (0, 1].")
@@ -453,125 +435,38 @@ def gradient_norm(model) -> float:
     return total_norm
 
 
-def reinforce_episode(
-    policy,
-    env,
-    cfg,
-    log_metrics: bool = True,
-):
-    """Unroll the policy in the environment for one episode and compute the loss.
+def collect_episode(agent, env, seed):
+    """Collect experience from one episode by running the agent in the environment.
 
-    The discounted returns at each timestep, are calculated as:
-
-        G_t = r_(t+1) + gamma*G_(t+1)
-
-    This follows a dynamic programming approach, with which we memorize solutions in order to avoid computing
-    them multiple times. We compute this starting from the last timestep to the first, in order to employ the formula
-    presented above and avoid redundant computations that would be needed if we were to do it from first to last.
+    The agent selects actions using its policy and observes rewards. At the end of the episode,
+    the discounted returns are computed and stored for later policy updates.
 
     Args:
-        policy (FlappyBirdStatePolicy): Policy network
-        env (gymnasium.Env): Environment
-        cfg (DictConfig): Training config
-        log_metrics (bool): Whether to log metrics to MLflow
+        agent (ReinforceAgent): The REINFORCE agent
+        env (gymnasium.Env): The environment
+        seed (int): Random seed for episode initialization
+
+    Returns:
+        tuple: (summed_reward, info) where summed_reward is the total episode reward
+               and info contains episode statistics
     """
     if env.spec.max_episode_steps is None:
         raise ValueError(
             "Env must have a finite max episode length. Check if env is wrapped in TimeLimit."
         )
 
-    log_probs = []
-    logits = []
-    rewards = []
-
-    # TODO: consider cfg.seed + i_episode for varied but reproducible trajectories
     # Collect trajectory: run the whole episode
-    state, _ = env.reset(seed=cfg.seed)
+    state, _ = env.reset(seed=seed)
     episode_over = False
     while not episode_over:  # expecting env.spec.max_episode_steps is not None
-        action, log_prob, dist_logit = policy.act(state)
+        action = agent.act(state)
+
         state, reward, terminated, truncated, info = env.step(action.item())
-
-        log_probs.append(log_prob)
-        logits.append(dist_logit)
-        rewards.append(reward)
-
         episode_over = terminated or truncated
 
-    # Calculate the (discounted) returns for each time step
-    returns, ret_mean, ret_std = compute_returns(rewards, cfg.gamma, normalize=True, device=device)
+        summed_reward = agent.observe(reward, episode_over)
 
-    # Calculate the policy loss
-    # torch.stack and @ preserve gradients (doesn't break computation graph as opposed to torch.tensor and .dot())
-    loss = -torch.stack(log_probs).T @ returns
-
-    # Add the entropy term if specified
-    entropy_term = (
-        cfg.entropy_coeff * Categorical(logits=torch.stack(logits)).entropy().sum()
-        if cfg.entropy_coeff
-        else 0.0
-    )
-    loss += entropy_term
-
-    if log_metrics:
-        # present if env is wrapped in RecordEpisodeStatistics
-        i_episode = env.get_wrapper_attr("episode_count")
-
-        mlflow.log_metric("loss/total", loss.item(), step=i_episode)
-        if cfg.entropy_coeff:
-            mlflow.log_metric("loss/entropy_term", entropy_term.item(), step=i_episode)
-        # Policy stats
-        mlflow.log_metric("policy/return_mean", ret_mean.item(), step=i_episode)
-        mlflow.log_metric("policy/return_std", ret_std.item(), step=i_episode)
-        if "episode" in info:
-            mlflow.log_metric("episode/reward", info["episode"]["r"], step=i_episode)
-            mlflow.log_metric("episode/length", info["episode"]["l"], step=i_episode)
-            mlflow.log_metric("episode/duration", info["episode"]["t"], step=i_episode)
-
-    return loss, sum(rewards), entropy_term
-
-
-def train_loop(policy, env, optimizer, scheduler, cfg, seed):
-    torch.manual_seed(cfg.seed)
-    np.random.seed(cfg.seed)
-    env.reset(seed=cfg.seed)
-
-    batching = cfg.batch_size is not None and cfg.batch_size > 1
-    grad_clipping = cfg.max_grad_norm is not None and cfg.max_grad_norm > 0.0
-
-    for i_episode in range(cfg.n_episodes):
-        log_episode = i_episode % cfg.log_every == cfg.log_every - 1
-        loss, summed_reward, entropy_term = reinforce_episode(
-            policy, env, cfg.gamma, cfg.entropy_coeff, log_metrics=log_episode
-        )
-
-        # Scale loss for gradient accumulation if batching
-        if batching:
-            loss /= cfg.batch_size
-            entropy_term /= cfg.batch_size
-
-        # Compute gradients: accumulates if batching
-        loss.backward()
-
-        if log_episode:
-            print(
-                f"Episode {i_episode + 1:> 6d} | Reward Sum: {summed_reward:> 10.4f} | "
-                f"Loss: {loss.item():> 10.4f} | Entropy: {entropy_term.item():> .2e} | "
-                f"LR: {scheduler.get_last_lr()[0]:> .4e}"
-            )
-
-        # Episode batching: average loss over several episodes and update only once
-        if not batching or (i_episode + 1) % cfg.batch_size == 0:
-            # Gradient clipping
-            if grad_clipping:
-                torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=cfg.max_grad_norm)
-
-            mlflow.log_metric("policy/gradient_norm", gradient_norm(policy), step=i_episode)
-
-            # Update parameters and clear gradients
-            optimizer.step()
-            scheduler.step()
-            optimizer.zero_grad()
+    return summed_reward, info
 
 
 @app.command()
@@ -620,7 +515,7 @@ def train(
         for i_episode in range(cfg.n_episodes):
             # Collect experience over one episode
             seed = cfg.seed if cfg.seed_fixed else cfg.seed + i_episode
-            summed_reward, info = collect_episode(agent, env, cfg, seed)
+            summed_reward, info = collect_episode(agent, env, seed)
 
             # Episode batching: average loss over several episodes and update only once
             if not batching or (i_episode + 1) % cfg.batch_size == 0:
