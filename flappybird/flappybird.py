@@ -135,27 +135,34 @@ class UpdateResult:
 
 
 class ReinforceAgent:
-    def __init__(self, cfg, run_id=None):
-        self.cfg = cfg
-        self.batching = cfg.batch_size is not None and cfg.batch_size > 1
-        self.grad_clipping = cfg.max_grad_norm is not None and cfg.max_grad_norm > 0.0
+    def __init__(self, cfg, run_id=None, eval_mode=False):
+        if eval_mode:
+            if run_id is None:
+                raise ValueError("Run ID must be specified in eval mode")
+            self.policy_net = load_model_with_mlflow(run_id, device=device)
+        else:
+            self.cfg = cfg
+            self.batching = cfg.batch_size is not None and cfg.batch_size > 1
+            self.grad_clipping = cfg.max_grad_norm is not None and cfg.max_grad_norm > 0.0
 
-        self.policy_net = prepare_policy_model(cfg, run_id)
-        self.optimizer = optim.AdamW(self.policy_net.parameters(), lr=cfg.learning_rate)
-        # Set up LR scheduler to decay from initial to target learning rate by the end of training
-        n_scheduler_steps = cfg.n_episodes // cfg.batch_size if self.batching else cfg.n_episodes
-        gamma = (cfg.target_learning_rate / cfg.learning_rate) ** (1 / n_scheduler_steps)
-        self.scheduler = optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=gamma)
+            self.policy_net = prepare_policy_model(cfg, run_id)
+            self.optimizer = optim.AdamW(self.policy_net.parameters(), lr=cfg.learning_rate)
+            # Set up LR scheduler to decay from initial to target learning rate by the end of training
+            n_scheduler_steps = (
+                cfg.n_episodes // cfg.batch_size if self.batching else cfg.n_episodes
+            )
+            gamma = (cfg.target_learning_rate / cfg.learning_rate) ** (1 / n_scheduler_steps)
+            self.scheduler = optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=gamma)
+
+            # batch history buffers
+            self.batch_log_probs = []
+            self.batch_logits = []
+            self.batch_returns = []
 
         # episode history buffers
         self.log_probs = []
         self.logits = []
         self.rewards = []
-
-        # batch history buffers
-        self.batch_log_probs = []
-        self.batch_logits = []
-        self.batch_returns = []
 
     def act(self, state, deterministic=False):
         """Select an action given the state."""
@@ -584,9 +591,7 @@ def train(
         max_episode_steps=cfg.max_episode_steps,
         record_stats=True,
         video_folder="videos/train",
-        episode_trigger=lambda e: e % cfg.record_every == 0
-        if cfg.record_every
-        else None,
+        episode_trigger=lambda e: e % cfg.record_every == 0 if cfg.record_every else None,
         use_lidar=False,
     )
 
@@ -660,7 +665,7 @@ def eval(
     """Evaluate the policy."""
     cfg = load_config(config_path)
 
-    agent = ReinforceAgent(cfg, run_id)
+    agent = ReinforceAgent(cfg, run_id, eval_mode=True)
     print("Evaluating policy...")
 
     env = make_env(
@@ -678,10 +683,11 @@ def eval(
         for episode in range(cfg.n_episodes):
             # Each episode has predictable seed for reproducible evaluation
             # making sure policy can cope with env stochasticity
-            state, _ = env.reset(seed=cfg.seed + episode)
+            seed = cfg.seed if cfg.seed_fixed else cfg.seed + episode
+            state, _ = env.reset(seed=seed)
             done = False
             while not done:
-                action, _, _ = agent.act(state, deterministic=not cfg.stochastic)
+                action = agent.act(state, deterministic=not cfg.stochastic)
                 state, reward, terminated, truncated, info = env.step(action.item())
                 done = terminated or truncated
 
