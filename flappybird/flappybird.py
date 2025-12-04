@@ -245,11 +245,7 @@ class ReinforceAgent:
         )
 
 
-def collect_episode(
-    agent,
-    env,
-    cfg,
-):
+def collect_episode(agent, env, seed):
     """Unroll the policy in the environment for one episode and compute the loss.
 
     The discounted returns at each timestep, are calculated as:
@@ -271,9 +267,8 @@ def collect_episode(
             "Env must have a finite max episode length. Check if env is wrapped in TimeLimit."
         )
 
-    # TODO: consider cfg.seed + i_episode for varied but reproducible trajectories
     # Collect trajectory: run the whole episode
-    state, _ = env.reset(seed=cfg.seed)
+    state, _ = env.reset(seed=seed)
     episode_over = False
     while not episode_over:  # expecting env.spec.max_episode_steps is not None
         action = agent.act(state)
@@ -400,6 +395,7 @@ def make_run_name(cfg):
         else:
             return f"{num:.1f}{['', 'k', 'M', 'B', 'T'][magnitude]}"
 
+    # TODO: log_lr = np.floor(np.log10(cfg.target_learning_rate)).astype(int)
     name = f"e{human_format(cfg.n_episodes)}_g{cfg.gamma:.2f}_llr{cfg.target_learning_rate:.2e}"
     if cfg.batch_size is not None and cfg.batch_size > 1:
         name += f"_b{cfg.batch_size:d}"
@@ -601,7 +597,6 @@ def train(
     random.seed(cfg.seed)
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
-    env.reset(seed=cfg.seed)
 
     # Set up the agent
     agent = ReinforceAgent(cfg, run_id)
@@ -619,7 +614,8 @@ def train(
 
         for i_episode in range(cfg.n_episodes):
             # Collect experience over one episode
-            summed_reward, info = collect_episode(agent, env, cfg)
+            seed = cfg.seed if cfg.seed_fixed else cfg.seed + i_episode
+            summed_reward, info = collect_episode(agent, env, cfg, seed)
 
             # Episode batching: average loss over several episodes and update only once
             if not batching or (i_episode + 1) % cfg.batch_size == 0:
@@ -649,6 +645,7 @@ def train(
         # Log summary metrics
         return_queue = env.get_wrapper_attr("return_queue")
         mlflow.log_metric(f"max_reward_last_{return_queue.maxlen}_episodes", max(return_queue))
+        # TODO: mlflow.log_param("optimizer", agent.optimizer.__class__.__name__)
 
         save_model_with_mlflow(agent.policy_net)
         env.close()
