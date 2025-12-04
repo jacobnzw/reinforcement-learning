@@ -1,5 +1,6 @@
 import random
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -52,9 +53,7 @@ class FlappyBirdImagePolicy(nn.Module):
 
         # Figure out the state dimensionality given sample input
         with torch.no_grad():
-            state_dim = self.conv_stack(
-                torch.zeros(1, 3 * frame_stack, *self.INPUT_HW)
-            ).numel()
+            state_dim = self.conv_stack(torch.zeros(1, 3 * frame_stack, *self.INPUT_HW)).numel()
         hidden_dim = 512
 
         self.fc_stack = nn.Sequential(
@@ -125,9 +124,17 @@ class FlappyBirdStatePolicy(nn.Module):
         return self.fc_stack(x)
 
 
-class ReinforceAgent:
-    # TODO: decide on the class reposibilities
+@dataclass
+class UpdateResult:
+    loss: float
+    entropy_term: float
+    returns_mean: float
+    returns_std: float
+    grad_norm: float
+    last_lr: float
 
+
+class ReinforceAgent:
     def __init__(self, cfg, run_id=None):
         self.cfg = cfg
         self.batching = cfg.batch_size is not None and cfg.batch_size > 1
@@ -136,12 +143,8 @@ class ReinforceAgent:
         self.policy_net = prepare_policy_model(cfg, run_id)
         self.optimizer = optim.AdamW(self.policy_net.parameters(), lr=cfg.learning_rate)
         # Set up LR scheduler to decay from initial to target learning rate by the end of training
-        n_scheduler_steps = (
-            cfg.n_episodes // cfg.batch_size if self.batching else cfg.n_episodes
-        )
-        gamma = (cfg.target_learning_rate / cfg.learning_rate) ** (
-            1 / n_scheduler_steps
-        )
+        n_scheduler_steps = cfg.n_episodes // cfg.batch_size if self.batching else cfg.n_episodes
+        gamma = (cfg.target_learning_rate / cfg.learning_rate) ** (1 / n_scheduler_steps)
         self.scheduler = optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=gamma)
 
         # episode history buffers
@@ -172,73 +175,80 @@ class ReinforceAgent:
 
     def observe(self, reward, episode_end=False):
         self.rewards.append(reward)
-        # TODO: We might compute episode-wise loss tensor and stuff them into dedicated batch buffer,
-        # then average them and call .backward() in update()
+        summed_reward = None
         if episode_end:
             # Compute and store the returns
-            returns = compute_returns(
-                self.rewards, self.cfg.gamma, normalize=False, device=device
-            )
+            returns = compute_returns(self.rewards, self.cfg.gamma, normalize=False, device=device)
             self.batch_returns.append(returns)
-            self.batch_log_probs.append(self.log_probs)
-            self.batch_logits.append(self.logits)
+            self.batch_log_probs.append(torch.cat(self.log_probs))
+            self.batch_logits.append(torch.cat(self.logits))
+
+            summed_reward = sum(self.rewards)
+
             # Clear the episode buffers
-            self.rewards = []
-            self.log_probs = []
-            self.logits = []
+            self.rewards.clear()
+            self.log_probs.clear()
+            self.logits.clear()
 
-        # TODO: Consider returning the rewards before clearing for collect_episode to log
+        return summed_reward
 
-    def update(self, log_metrics=True):
+    def update(self, grad_clipping=False) -> UpdateResult:
         """Update the policy network's weights based on episode history."""
 
-        # Calculate the (discounted) returns for each time step
-        # returns, ret_mean, ret_std = compute_returns(
-        #     self.rewards, self.cfg.gamma, normalize=True, device=device
-        # )
+        # Clear gradients
+        self.optimizer.zero_grad()
 
         # Stack the batch returns and normalize them
-        returns = torch.stack(self.batch_returns)
+        returns = torch.cat(self.batch_returns)
         returns_mean, returns_std = returns.mean(), returns.std()
         returns = (returns - returns_mean) / (returns_std + 1e-8)
         # Calculate the policy loss
-        # torch.stack and @ preserve gradients (doesn't break computation graph as opposed to torch.tensor and .dot())
-        loss = -torch.stack(self.log_probs).T @ returns
+        # torch.cat and @ preserve gradients and computation graph unlike torch.tensor and .dot()
+        loss = -torch.cat(self.batch_log_probs) @ returns
 
         # Add the entropy term if specified
         entropy_term = (
             self.cfg.entropy_coeff
-            * Categorical(logits=torch.stack(self.batch_logits)).entropy().sum()
+            * Categorical(logits=torch.cat(self.batch_logits)).entropy().sum()
             if self.cfg.entropy_coeff
             else 0.0
         )
         loss += entropy_term
-        loss /= len(
-            self.batch_returns
-        )  # average loss over the episode batch; divide by 1 if not batching
+        # average loss over the episode batch; divide by 1 if not batching
+        loss /= len(self.batch_returns)
         loss.backward()
+
+        if grad_clipping:
+            torch.nn.utils.clip_grad_norm_(
+                self.policy_net.parameters(), max_norm=self.cfg.max_grad_norm
+            )
+        grad_norm = gradient_norm(self.policy_net)
 
         # Update parameters and clear gradients
         self.optimizer.step()
         self.scheduler.step()
-        self.optimizer.zero_grad()
-
-        # TODO: decide whether to even compute this
-        # summed_reward = sum(self.rewards)
 
         # Clear history buffers
-        self.log_probs = []
-        self.logits = []
-        self.rewards = []
+        self.batch_returns.clear()
+        self.batch_log_probs.clear()
+        self.batch_logits.clear()
 
-        return loss, summed_reward, entropy_term, returns_mean, returns_std
+        return UpdateResult(
+            loss=loss.item(),
+            entropy_term=entropy_term.item()
+            if isinstance(entropy_term, torch.Tensor)
+            else entropy_term,
+            returns_mean=returns_mean.item(),
+            returns_std=returns_std.item(),
+            grad_norm=grad_norm,
+            last_lr=self.scheduler.get_last_lr()[0],
+        )
 
 
 def collect_episode(
     agent,
     env,
     cfg,
-    log_metrics: bool = True,
 ):
     """Unroll the policy in the environment for one episode and compute the loss.
 
@@ -271,35 +281,9 @@ def collect_episode(
         state, reward, terminated, truncated, info = env.step(action.item())
         episode_over = terminated or truncated
 
-        agent.observe(reward, episode_over)
+        summed_reward = agent.observe(reward, episode_over)
 
-    # NOTE: a bit problematic here, because we won't have loss until agent.update(),
-    # so logging only doable at the frequency of model updates.
-    # UNLESS? we trigger loss compute in the agent after each episode, quite the pain though just for printing!
-    # TODO: return data and move logging to train() loop?
-    if log_metrics:
-        # present if env is wrapped in RecordEpisodeStatistics
-        i_episode = env.get_wrapper_attr("episode_count")
-
-        print(
-            f"Episode {i_episode + 1:> 6d} | Reward Sum: {summed_reward:> 10.4f} | "
-            f"Loss: {loss.item():> 10.4f} | Entropy: {entropy_term.item():> .2e} | "
-            f"LR: {agent.scheduler.get_last_lr()[0]:> .4e}"
-        )
-        mlflow.log_metric(
-            "policy/learning_rate", agent.scheduler.get_last_lr()[0], step=i_episode
-        )
-
-        mlflow.log_metric("loss/total", loss.item(), step=i_episode)
-        if cfg.entropy_coeff:
-            mlflow.log_metric("loss/entropy_term", entropy_term.item(), step=i_episode)
-        # Policy stats
-        mlflow.log_metric("policy/return_mean", ret_mean.item(), step=i_episode)
-        mlflow.log_metric("policy/return_std", ret_std.item(), step=i_episode)
-        if "episode" in info:
-            mlflow.log_metric("episode/reward", info["episode"]["r"], step=i_episode)
-            mlflow.log_metric("episode/length", info["episode"]["l"], step=i_episode)
-            mlflow.log_metric("episode/duration", info["episode"]["t"], step=i_episode)
+    return summed_reward, info
 
 
 def load_config(config_path: Path) -> DictConfig:
@@ -381,9 +365,7 @@ def make_env(
     **kwargs,
 ):
     """Make the environment."""
-    env = gym.make(
-        env_id, render_mode=render_mode, max_episode_steps=max_episode_steps, **kwargs
-    )
+    env = gym.make(env_id, render_mode=render_mode, max_episode_steps=max_episode_steps, **kwargs)
     if record_stats:
         env = gym.wrappers.RecordEpisodeStatistics(env)
     if video_folder:
@@ -434,12 +416,8 @@ def prepare_policy_model(cfg, run_id=None, device=None):
         return FlappyBirdStatePolicy(hidden_dim=cfg.hidden_dim).to(device)
 
 
-def compute_returns(rewards, gamma, normalize=True, device="cuda"):
+def compute_returns(rewards, gamma, normalize=False, device="cuda"):
     """Compute the returns from the rewards."""
-
-    # TODO: generalize to accept multiple sequences of rewards (list[list[float]]) coming from multiple episodes
-    # and compute returns for each sequence separately, then normalize using mean, std from all return sequences.
-    # TODO: extend tests
 
     if gamma <= 0.0 or gamma > 1.0:
         raise ValueError(f"Invalid gamma: {gamma}. Should be in range (0, 1].")
@@ -462,7 +440,7 @@ def compute_returns(rewards, gamma, normalize=True, device="cuda"):
     return returns
 
 
-def gradient_norm(model):
+def gradient_norm(model) -> float:
     """Compute the gradient L2 norm of the model."""
     total_norm = 0
     for p in model.parameters():
@@ -518,9 +496,7 @@ def reinforce_episode(
         episode_over = terminated or truncated
 
     # Calculate the (discounted) returns for each time step
-    returns, ret_mean, ret_std = compute_returns(
-        rewards, cfg.gamma, normalize=True, device=device
-    )
+    returns, ret_mean, ret_std = compute_returns(rewards, cfg.gamma, normalize=True, device=device)
 
     # Calculate the policy loss
     # torch.stack and @ preserve gradients (doesn't break computation graph as opposed to torch.tensor and .dot())
@@ -585,13 +561,9 @@ def train_loop(policy, env, optimizer, scheduler, cfg, seed):
         if not batching or (i_episode + 1) % cfg.batch_size == 0:
             # Gradient clipping
             if grad_clipping:
-                torch.nn.utils.clip_grad_norm_(
-                    policy.parameters(), max_norm=cfg.max_grad_norm
-                )
+                torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=cfg.max_grad_norm)
 
-            mlflow.log_metric(
-                "policy/gradient_norm", gradient_norm(policy), step=i_episode
-            )
+            mlflow.log_metric("policy/gradient_norm", gradient_norm(policy), step=i_episode)
 
             # Update parameters and clear gradients
             optimizer.step()
@@ -601,9 +573,7 @@ def train_loop(policy, env, optimizer, scheduler, cfg, seed):
 
 @app.command()
 def train(
-    config_path: str = typer.Option(
-        "train_config.yaml", help="Path to training config file"
-    ),
+    config_path: str = typer.Option("train_config.yaml", help="Path to training config file"),
     run_id: str = typer.Option(None, "-r", "--run-id", help="MLflow run ID"),
 ):
     """Train using REINFORCE algorithm. A basic policy gradient method."""
@@ -633,13 +603,8 @@ def train(
     np.random.seed(cfg.seed)
     env.reset(seed=cfg.seed)
 
-    # Set up policy model
-    # policy = prepare_policy_model(cfg, run_id, device)
-    # optimizer = optim.Adam(policy.parameters(), lr=cfg.learning_rate)
-    # # Set up LR scheduler to decay from initial to target learning rate by the end of training
-    # n_scheduler_steps = cfg.n_episodes // cfg.batch_size if batching else cfg.n_episodes
-    # gamma = (cfg.target_learning_rate / cfg.learning_rate) ** (1 / n_scheduler_steps)
-    # scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
+    # Set up the agent
+    agent = ReinforceAgent(cfg, run_id)
 
     with mlflow.start_run(run_name=make_run_name(cfg)) as run:
         print("\nTraining Flappy with REINFORCE...\n")
@@ -653,59 +618,52 @@ def train(
         #     train_loop(policy, env, optimizer, scheduler, cfg, seed)
 
         for i_episode in range(cfg.n_episodes):
-            log_episode = i_episode % cfg.log_every == cfg.log_every - 1
-            collect_episode(agent, env, cfg, log_metrics=log_episode)
-
-            # if log_episode:
-            #     print(
-            #         f"Episode {i_episode + 1:> 6d} | Reward Sum: {summed_reward:> 10.4f} | "
-            #         f"Loss: {loss.item():> 10.4f} | Entropy: {entropy_term.item():> .2e} | "
-            #         f"LR: {scheduler.get_last_lr()[0]:> .4e}"
-            #     )
-            #     mlflow.log_metric(
-            #         "policy/learning_rate", scheduler.get_last_lr()[0], step=i_episode
-            #     )
+            # Collect experience over one episode
+            summed_reward, info = collect_episode(agent, env, cfg)
 
             # Episode batching: average loss over several episodes and update only once
             if not batching or (i_episode + 1) % cfg.batch_size == 0:
-                # Gradient clipping
-                # TODO: move to agent?
-                if grad_clipping:
-                    torch.nn.utils.clip_grad_norm_(
-                        policy.parameters(), max_norm=cfg.max_grad_norm
-                    )
+                # Agent has collected enough experience to learn, do a policy update
+                result = agent.update(grad_clipping)
 
-                mlflow.log_metric(
-                    "policy/gradient_norm", gradient_norm(policy), step=i_episode
+            # Assumes log_every > batch_size: log w/ lower frequency than update => the logged vars are available
+            if (i_episode + 1) % cfg.log_every == 0:
+                print(
+                    f"Episode {i_episode + 1:> 6d} | Reward Sum: {summed_reward:> 10.4f} | "
+                    f"Loss: {result.loss:> 10.4f} | Entropy: {result.entropy_term:> .2e} | "
+                    f"LR: {result.last_lr:> .4e}"
                 )
 
-                # Agent has collected enough experience to learn, do a policy update
-                agent.update()
+                mlflow.log_metric("loss/total", result.loss, step=i_episode)
+                mlflow.log_metric("loss/entropy_term", result.entropy_term, step=i_episode)
+                # Policy stats
+                mlflow.log_metric("policy/return_mean", result.returns_mean, step=i_episode)
+                mlflow.log_metric("policy/return_std", result.returns_std, step=i_episode)
+                mlflow.log_metric("policy/learning_rate", result.last_lr, step=i_episode)
+                mlflow.log_metric("policy/gradient_norm", result.grad_norm, step=i_episode)
+                if "episode" in info:
+                    mlflow.log_metric("episode/reward", info["episode"]["r"], step=i_episode)
+                    mlflow.log_metric("episode/length", info["episode"]["l"], step=i_episode)
+                    mlflow.log_metric("episode/duration", info["episode"]["t"], step=i_episode)
 
-        # Log hyperparameters and summary metrics
+        # Log summary metrics
         return_queue = env.get_wrapper_attr("return_queue")
-        buffer_size = return_queue.maxlen
-        mlflow.log_metric(f"max_reward_last_{buffer_size}_episodes", max(return_queue))
-        # TODO: save the whole agent?
-        save_model_with_mlflow(policy)
+        mlflow.log_metric(f"max_reward_last_{return_queue.maxlen}_episodes", max(return_queue))
 
+        save_model_with_mlflow(agent.policy_net)
         env.close()
 
 
 @app.command()
 def eval(
-    config_path: str = typer.Option(
-        "eval_config.yaml", help="Evaluation config file path"
-    ),
+    config_path: str = typer.Option("eval_config.yaml", help="Evaluation config file path"),
     run_id: str = typer.Option(..., "-r", "--run-id", help="MLflow run ID"),
-    no_record: bool = typer.Option(
-        False, "-n", "--no-record", help="Don't record videos"
-    ),
+    no_record: bool = typer.Option(False, "-n", "--no-record", help="Don't record videos"),
 ):
     """Evaluate the policy."""
     cfg = load_config(config_path)
 
-    policy = load_model_with_mlflow(run_id, device=device)
+    agent = ReinforceAgent(cfg, run_id)
     print("Evaluating policy...")
 
     env = make_env(
@@ -717,6 +675,7 @@ def eval(
         use_lidar=False,
     )
 
+    # TODO: train/ and eval/ prefixes for mlflow logging, log into the same run ID during eval
     with torch.no_grad():
         episode_rewards = []
         for episode in range(cfg.n_episodes):
@@ -725,7 +684,7 @@ def eval(
             state, _ = env.reset(seed=cfg.seed + episode)
             done = False
             while not done:
-                action, _, _ = policy.act(state, deterministic=not cfg.stochastic)
+                action, _, _ = agent.act(state, deterministic=not cfg.stochastic)
                 state, reward, terminated, truncated, info = env.step(action.item())
                 done = terminated or truncated
 
