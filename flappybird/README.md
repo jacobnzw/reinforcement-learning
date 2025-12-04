@@ -8,6 +8,9 @@ Grok: Adding the `entropy_coef` term to the loss function helps exploration.
   - I'm observing faster improvement in first few hundreds of episodes, but after that the loss gets starts to 
   oscillate. This did not happen when not using the entropy term.
   - Higher initial learning rates give earlier spike in rewards, but don't help the overall flat trend.
+  - Fixed seed for training: rewards much less noisy and plateau early
+  - Random seed for training: rewards can spike wildly, more noisy and higher eval rewards
+  - Variable seeds for training: ?
 
 
 [Gymnasium: Recording Agents](https://gymnasium.farama.org/introduction/record_agent/)

@@ -1,13 +1,14 @@
 env_id: FlappyBird-v0
-n_episodes: 20_000
+n_episodes: 10_000
 max_episode_steps: 10_000
 hidden_dim: 128
-gamma: 0.95
+gamma: 0.99
 entropy_coeff: 0.01
 learning_rate: 1e-2  # initial learning rate decays to target_learning_rate by the end of training
 target_learning_rate: 1e-4
-batch_size: 50  # 0 to disable gradient accumulation
-max_grad_norm: 1.0  # 0.0 to disable gradient clipping
+batch_size: 25  # 0 to disable gradient accumulation
+max_grad_norm: 5.0  # 0.0 to disable gradient clipping
 seed: 42  # training seed
+seed_fixed: true  # whether to fix the seed for each episode
 log_every: 250  # log/print after this many episodes
 record_every: 5000  # record video after this many episodes

@@ -22,3 +22,6 @@ tests = ["pytest>=9.0.0"]
 [tool.pytest.ini_options]
 pythonpath = "."
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100 # Increase from default 88
