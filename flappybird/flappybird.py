@@ -23,6 +23,8 @@ from utils import push_to_hub, record_video  # noqa: F401
 
 # TODO: move helper funcs to utils; or delete utils completely
 # TODO: make upload to HF as another command
+# TODO: add switch to turn off mlflow logging
+# TODO: test reproducibility
 
 device = torch.accelerator.current_accelerator()
 app = typer.Typer()
@@ -499,6 +501,7 @@ def train(
     random.seed(cfg.seed)
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
+    torch.cuda.manual_seed(cfg.seed)
 
     # Set up the agent
     agent = ReinforceAgent(cfg, run_id)
