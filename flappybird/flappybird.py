@@ -21,7 +21,6 @@ from torch.distributions import Categorical
 # from huggingface_sb3 import package_to_hub
 from utils import push_to_hub, record_video  # noqa: F401
 
-# TODO: refactor according to https://gymnasium.farama.org/tutorials/training_agents/mujoco_reinforce/
 # TODO: move helper funcs to utils; or delete utils completely
 # TODO: make upload to HF as another command
 
@@ -106,6 +105,7 @@ class FlappyBirdStatePolicy(nn.Module):
     state_dim = 12
     action_dim = 2
 
+    # TODO: test w/ frame stack > 1
     def __init__(self, hidden_dim=64, frame_stack=1):
         super(FlappyBirdStatePolicy, self).__init__()
 
@@ -274,8 +274,10 @@ def log_config_to_mlflow(config):
         "batch_size",
         "max_grad_norm",
         "hidden_dim",
+        "n_episodes",
+        "seed",
     ]
-    TAG_KEYS = ["env_id", "n_episodes", "seed"]
+    TAG_KEYS = ["env_id", "seed_fixed"]
 
     # Log the full set of hyperparameters
     for key in HPARAM_KEYS:
@@ -366,8 +368,8 @@ def make_run_name(cfg):
         else:
             return f"{num:.1f}{['', 'k', 'M', 'B', 'T'][magnitude]}"
 
-    # TODO: log_lr = np.floor(np.log10(cfg.target_learning_rate)).astype(int)
-    name = f"e{human_format(cfg.n_episodes)}_g{cfg.gamma:.2f}_llr{cfg.target_learning_rate:.2e}"
+    log_lr = np.floor(np.log10(cfg.target_learning_rate)).astype(int)
+    name = f"e{human_format(cfg.n_episodes)}_g{cfg.gamma:.2f}_llr{log_lr:d}"
     if cfg.batch_size is not None and cfg.batch_size > 1:
         name += f"_b{cfg.batch_size:d}"
     return name
@@ -530,22 +532,24 @@ def train(
                     f"LR: {result.last_lr:> .4e}"
                 )
 
-                mlflow.log_metric("loss/total", result.loss, step=i_episode)
-                mlflow.log_metric("loss/entropy_term", result.entropy_term, step=i_episode)
+                mlflow.log_metric("train/loss/total", result.loss, step=i_episode)
+                mlflow.log_metric("train/loss/entropy_term", result.entropy_term, step=i_episode)
                 # Policy stats
-                mlflow.log_metric("policy/return_mean", result.returns_mean, step=i_episode)
-                mlflow.log_metric("policy/return_std", result.returns_std, step=i_episode)
-                mlflow.log_metric("policy/learning_rate", result.last_lr, step=i_episode)
-                mlflow.log_metric("policy/gradient_norm", result.grad_norm, step=i_episode)
+                mlflow.log_metric("train/policy/return_mean", result.returns_mean, step=i_episode)
+                mlflow.log_metric("train/policy/return_std", result.returns_std, step=i_episode)
+                mlflow.log_metric("train/policy/learning_rate", result.last_lr, step=i_episode)
+                mlflow.log_metric("train/policy/gradient_norm", result.grad_norm, step=i_episode)
                 if "episode" in info:
-                    mlflow.log_metric("episode/reward", info["episode"]["r"], step=i_episode)
-                    mlflow.log_metric("episode/length", info["episode"]["l"], step=i_episode)
-                    mlflow.log_metric("episode/duration", info["episode"]["t"], step=i_episode)
+                    mlflow.log_metric("train/episode/reward", info["episode"]["r"], step=i_episode)
+                    mlflow.log_metric("train/episode/length", info["episode"]["l"], step=i_episode)
+                    mlflow.log_metric(
+                        "train/episode/duration", info["episode"]["t"], step=i_episode
+                    )
 
         # Log summary metrics
         return_queue = env.get_wrapper_attr("return_queue")
         mlflow.log_metric(f"max_reward_last_{return_queue.maxlen}_episodes", max(return_queue))
-        # TODO: mlflow.log_param("optimizer", agent.optimizer.__class__.__name__)
+        mlflow.log_param("optimizer", agent.optimizer.__class__.__name__)
 
         save_model_with_mlflow(agent.policy_net)
         env.close()
@@ -572,35 +576,40 @@ def eval(
         use_lidar=False,
     )
 
-    # TODO: train/ and eval/ prefixes for mlflow logging, log into the same run ID during eval
-    with torch.no_grad():
-        episode_rewards = []
-        for episode in range(cfg.n_episodes):
-            # Each episode has predictable seed for reproducible evaluation
-            # making sure policy can cope with env stochasticity
-            seed = cfg.seed if cfg.seed_fixed else cfg.seed + episode
-            state, _ = env.reset(seed=seed)
-            done = False
-            while not done:
-                action = agent.act(state, deterministic=not cfg.stochastic)
-                state, reward, terminated, truncated, info = env.step(action.item())
-                done = terminated or truncated
+    with mlflow.start_run(run_id=run_id):
+        with torch.no_grad():
+            episode_rewards = []
+            for episode in range(cfg.n_episodes):
+                # Each episode has predictable seed for reproducible evaluation
+                # making sure policy can cope with env stochasticity
+                seed = cfg.seed if cfg.seed_fixed else cfg.seed + episode
+                state, _ = env.reset(seed=seed)
+                done = False
+                while not done:
+                    action = agent.act(state, deterministic=not cfg.stochastic)
+                    state, reward, terminated, truncated, info = env.step(action.item())
+                    done = terminated or truncated
 
-            # Extract episode statistics from info (available after episode ends)
-            if "episode" in info:
-                episode_reward = info["episode"]["r"][0]
-                episode_length = info["episode"]["l"][0]
-                episode_rewards.append(episode_reward)
-                print(
-                    f"Episode {episode:> 6d} | Reward: {episode_reward:> 6.2f} | Length: {episode_length:> 6d}"
-                )
+                # Extract episode statistics from info (available after episode ends)
+                if "episode" in info:
+                    episode_reward = info["episode"]["r"][0]
+                    episode_length = info["episode"]["l"][0]
+                    episode_rewards.append(episode_reward)
+                    print(
+                        f"Episode {episode:> 6d} | Reward: {episode_reward:> 6.2f} | Length: {episode_length:> 6d}"
+                    )
+                    mlflow.log_metric("eval/episode_reward", episode_reward, step=episode)
+                    mlflow.log_metric("eval/episode_length", episode_length, step=episode)
 
-    if episode_rewards:
-        mean_reward = np.mean(episode_rewards)
-        std_reward = np.std(episode_rewards)
-        print(
-            f"\nMean reward over {len(episode_rewards)} episodes: {mean_reward:.2f} +/- {std_reward:.2f}"
-        )
+        if episode_rewards:
+            mean_reward = np.mean(episode_rewards)
+            std_reward = np.std(episode_rewards)
+            print(
+                f"\nMean reward over {len(episode_rewards)} episodes: {mean_reward:.2f} +/- {std_reward:.2f}"
+            )
+            # TODO: log a seaborn boxplot of episode rewards
+            mlflow.log_metric("eval_mean_reward", mean_reward, step=0)
+            mlflow.log_metric("eval_std_reward", std_reward, step=0)
 
     env.close()
 

@@ -9,6 +9,6 @@ target_learning_rate: 1e-4
 batch_size: 25  # 0 to disable gradient accumulation
 max_grad_norm: 5.0  # 0.0 to disable gradient clipping
 seed: 42  # training seed
-seed_fixed: true  # whether to fix the seed for each episode
+seed_fixed: false  # whether to fix the seed for each episode
 log_every: 250  # log/print after this many episodes
 record_every: 5000  # record video after this many episodes
