@@ -4,18 +4,15 @@ This script handles the training loop, CLI interface, and MLflow logging
 for training REINFORCE agents on FlappyBird.
 """
 
-import random
 from typing import Optional
 
 import mlflow
-import numpy as np
-import torch
 import tyro
+from rich.pretty import pprint
 
 from agents import ReinforceAgent, collect_episode, make_env
 from configs import TrainConfig
-from utils import log_config_to_mlflow, save_model_with_mlflow
-from rich.pretty import pprint
+from utils import log_config_to_mlflow, save_model_with_mlflow, set_seeds
 
 # TODO: make upload to HF as another command
 # TODO: add switch to turn off mlflow logging
@@ -48,10 +45,7 @@ def train(
     # TODO: training should be repeated over several seeds and average the results
     # This needs however, training one model per seed, averaging the results across models and saving the best one
     # mlflow.start_run(nested=True) for child runs
-    random.seed(cfg.seed)
-    torch.manual_seed(cfg.seed)
-    np.random.seed(cfg.seed)
-    torch.cuda.manual_seed(cfg.seed)
+    set_seeds(cfg.seed)
 
     # Set up the agent
     agent = ReinforceAgent(cfg, run_id)

@@ -7,6 +7,7 @@ Hugging Face Hub integration.
 
 import datetime
 import json
+import random
 import tempfile
 from collections import deque
 from pathlib import Path
@@ -257,6 +258,14 @@ def load_model_with_mlflow(run_id, model_name="flappybird_reinforce", device=Non
 
 
 # Mathematical utilities
+def set_seeds(seed):
+    """Set seeds for reproducibility."""
+    random.seed(seed)
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    torch.cuda.manual_seed(seed)
+
+
 def compute_returns(rewards, gamma, normalize=False, device="cuda"):
     """Compute the returns from the rewards.
 
