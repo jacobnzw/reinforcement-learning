@@ -210,17 +210,17 @@ def push_to_hub(repo_id, env_id, model, hyperparameters, eval_env, video_fps=30)
 def log_config_to_mlflow(config):
     """Log config to MLflow."""
 
-    IGNORE_KEYS = ["max_episode_steps", "log_every", "record_every"]
-    TAG_KEYS = ["env_id", "seed_fixed"]
+    IGNORE_KEYS = ["env", "seed_fixed", "log_every", "record_every"]
 
     # Log the full set of hyperparameters
     for field in fields(config):
-        if field.name not in (IGNORE_KEYS + TAG_KEYS):
+        if field.name not in IGNORE_KEYS:
             mlflow.log_param(field.name, getattr(config, field.name))
+    mlflow.log_param("frame_stack", config.env.frame_stack)
 
-    # Log the rest as descriptive tags (Context)
-    for key in TAG_KEYS:
-        mlflow.set_tag(key, getattr(config, key))
+    # Log the rest as descriptive tags
+    mlflow.set_tag("seed_fixed", config.seed_fixed)
+    mlflow.set_tag("env_id", config.env.env_id)
 
 
 def save_model_with_mlflow(model, model_name="flappybird_reinforce"):

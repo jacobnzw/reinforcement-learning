@@ -23,7 +23,7 @@ mlflow.set_experiment(experiment_name="flappybird_reinforce_hparam_tuning")
 
 
 def train(
-    cfg: TrainConfig = TrainConfig(),
+    cfg: TrainConfig,
     run_id: Optional[str] = None,
 ):
     """Train using REINFORCE algorithm. A basic policy gradient method."""
@@ -32,10 +32,7 @@ def train(
     grad_clipping = cfg.max_grad_norm is not None and cfg.max_grad_norm > 0.0
 
     env = make_env(
-        cfg.env_id,
-        render_mode="rgb_array",
-        max_episode_steps=cfg.max_episode_steps,
-        stack_size=cfg.frame_stack,
+        cfg.env,
         record_stats=True,
         video_folder="videos/train",
         episode_trigger=lambda e: e % cfg.record_every == 0 if cfg.record_every else None,

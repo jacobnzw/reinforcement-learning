@@ -8,13 +8,13 @@ from typing import Callable
 
 import flappy_bird_gymnasium  # noqa: F401
 import gymnasium as gym
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.distributions import Categorical
 
+from configs import EnvConfig
 from utils import UpdateResult, compute_returns, gradient_norm, load_model_with_mlflow
 
 device = torch.accelerator.current_accelerator()
@@ -113,17 +113,19 @@ class FlappyBirdStatePolicy(nn.Module):
 
 
 def make_env(
-    env_id,
-    render_mode="rgb_array",
+    env_cfg: EnvConfig,
     record_stats=False,
-    max_episode_steps: int | None = 10_000,
-    stack_size: int | None = None,
     video_folder: str | None = None,
     episode_trigger: Callable[[int], bool] | None = None,
     **kwargs,
 ):
     """Make the environment."""
-    env = gym.make(env_id, render_mode=render_mode, max_episode_steps=max_episode_steps, **kwargs)
+    env = gym.make(
+        env_cfg.env_id,
+        render_mode="rgb_array",
+        max_episode_steps=env_cfg.max_episode_steps,
+        **kwargs,
+    )
     if record_stats:
         env = gym.wrappers.RecordEpisodeStatistics(env)
     if video_folder:
@@ -135,8 +137,8 @@ def make_env(
             episode_trigger=episode_trigger,
             disable_logger=True,
         )
-    if stack_size:
-        env = gym.wrappers.FrameStack(env, num_stack=stack_size)
+    if env_cfg.frame_stack > 1:
+        env = gym.wrappers.FrameStack(env, num_stack=env_cfg.frame_stack)
     return env
 
 
@@ -145,6 +147,7 @@ class ReinforceAgent:
         if eval_mode:
             if run_id is None:
                 raise ValueError("Run ID must be specified in eval mode")
+            self.cfg = cfg
             self.policy_net = load_model_with_mlflow(run_id, device=device)
         else:
             self.cfg = cfg
@@ -176,7 +179,7 @@ class ReinforceAgent:
         """Select an action given the state."""
 
         # when frame stacking, state[0] stores game states as a LazyFrame instance
-        if self.cfg.frame_stack > 1:
+        if self.cfg.env.frame_stack > 1:
             state = state[0][:].reshape(-1)
 
         state = torch.from_numpy(state).float().unsqueeze(0).to(device)

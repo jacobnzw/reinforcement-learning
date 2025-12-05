@@ -11,7 +11,7 @@ import tyro
 
 from agents import ReinforceAgent, make_env
 from configs import EvalConfig
-from utils import log_config_to_mlflow, boxplot_episode_rewards
+from utils import boxplot_episode_rewards, log_config_to_mlflow
 
 # MLflow setup
 mlflow.set_tracking_uri("http://localhost:5000")  # default mlflow server host:port
@@ -19,7 +19,7 @@ mlflow.set_experiment(experiment_name="flappybird_reinforce_hparam_tuning")
 
 
 def eval(
-    cfg: EvalConfig = EvalConfig(),
+    cfg: EvalConfig,
     run_id: str = "",
     no_record: bool = False,
 ):
@@ -29,9 +29,8 @@ def eval(
     print("Evaluating policy...")
 
     env = make_env(
-        cfg.env_id,
+        cfg.env,
         record_stats=True,
-        max_episode_steps=cfg.max_episode_steps,
         video_folder="videos/eval" if not no_record else None,
         episode_trigger=lambda e: True,
         use_lidar=False,
@@ -64,7 +63,7 @@ def eval(
                         )
                         mlflow.log_metric("episode/reward", episode_reward, step=episode)
                         mlflow.log_metric("episode/length", episode_length, step=episode)
-                        # Log game score
+                        # Log game score (# pipes crossed)
                         mlflow.log_metric("episode/score", info["score"], step=episode)
 
             if episode_rewards:

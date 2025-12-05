@@ -5,8 +5,21 @@ from typing import Optional
 
 
 @dataclass
+class EnvConfig:
+    """Environment configuration for FlappyBird."""
+
+    # Environment settings
+    env_id: str = "FlappyBird-v0"
+    max_episode_steps: int = 10_000
+    frame_stack: int = 1  # number of frames to stack
+
+
+@dataclass
 class TrainConfig:
     """Training configuration for REINFORCE agent."""
+
+    # Environment settings
+    env: EnvConfig
 
     # Training settings
     n_episodes: int = 5_000
@@ -17,11 +30,6 @@ class TrainConfig:
     target_learning_rate: float = 1e-4
     batch_size: Optional[int] = 25  # None or 0 to disable gradient accumulation
     max_grad_norm: Optional[float] = 5.0  # None or 0.0 to disable gradient clipping
-    frame_stack: int = 1  # number of frames to stack
-
-    # Environment settings
-    env_id: str = "FlappyBird-v0"
-    max_episode_steps: int = 10_000
 
     # Reproducibility
     seed: int = 42
@@ -37,8 +45,7 @@ class EvalConfig:
     """Evaluation configuration for trained agents."""
 
     # Environment settings
-    env_id: str = "FlappyBird-v0"
-    max_episode_steps: int = 10_000
+    env: EnvConfig
 
     # Evaluation settings
     n_episodes: int = 20  # eval on this many episodes
