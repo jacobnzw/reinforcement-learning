@@ -15,7 +15,6 @@ from configs import TrainConfig
 from utils import log_config_to_mlflow, log_results_to_mlflow, save_model_with_mlflow, set_seeds
 
 # TODO: make upload to HF as another command
-# TODO: add switch to turn off mlflow logging
 
 # MLflow setup
 mlflow.set_tracking_uri("http://localhost:5000")  # default mlflow server host:port

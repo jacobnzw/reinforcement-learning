@@ -35,6 +35,7 @@ class UpdateResult:
     last_lr: float
 
 
+# Hugging Face Hub utilities
 def evaluate_agent(env, max_steps, n_eval_episodes, policy):
     """
     Evaluate the agent for ``n_eval_episodes`` episodes and returns average reward and std of reward.
@@ -206,7 +207,7 @@ def push_to_hub(repo_id, env_id, model, hyperparameters, eval_env, video_fps=30)
         print(f"Your model is pushed to the Hub. You can view your model here: {repo_url}")
 
 
-# Configuration and MLflow utilities
+# MLflow utilities
 def log_config_to_mlflow(config):
     """Log config to MLflow."""
 

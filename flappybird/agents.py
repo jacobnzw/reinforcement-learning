@@ -93,7 +93,6 @@ class FlappyBirdStatePolicy(nn.Module):
     state_dim = 12
     action_dim = 2
 
-    # TODO: test w/ frame stack > 1
     def __init__(self, hidden_dim=64, frame_stack=1):
         super(FlappyBirdStatePolicy, self).__init__()
 
