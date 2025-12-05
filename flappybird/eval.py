@@ -11,7 +11,7 @@ import tyro
 
 from agents import ReinforceAgent, make_env
 from configs import EvalConfig
-from utils import boxplot_episode_rewards, log_config_to_mlflow
+from utils import boxplot_episode_rewards, log_config_to_mlflow, set_seeds
 
 # MLflow setup
 mlflow.set_tracking_uri("http://localhost:5000")  # default mlflow server host:port
@@ -24,7 +24,7 @@ def eval(
     no_record: bool = False,
 ):
     """Evaluate the policy."""
-
+    set_seeds(cfg.seed)
     agent = ReinforceAgent(cfg, run_id, eval_mode=True)
     print("Evaluating policy...")
 

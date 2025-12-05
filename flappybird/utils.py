@@ -9,7 +9,6 @@ import datetime
 import json
 import random
 import tempfile
-from collections import deque
 from dataclasses import dataclass, fields
 from pathlib import Path
 
@@ -296,58 +295,6 @@ def set_seeds(seed):
     torch.manual_seed(seed)
     np.random.seed(seed)
     torch.cuda.manual_seed(seed)
-
-
-def compute_returns(rewards, gamma, normalize=False, device="cuda"):
-    """Compute the returns from the rewards.
-
-    The discounted returns at each timestep are calculated as:
-        G_t = r_(t+1) + gamma*G_(t+1)
-
-    This follows a dynamic programming approach, computing from the last timestep to the first
-    to avoid redundant computations.
-
-    Args:
-        rewards (list): List of rewards
-        gamma (float): Discount factor
-        normalize (bool): Whether to normalize the returns
-        device (str): Device to use for computation
-
-    Returns:
-        returns (torch.Tensor): Tensor of returns
-        mean (float): Mean of the returns (if normalize=True)
-        std (float): Standard deviation of the returns (if normalize=True)
-    """
-
-    if gamma <= 0.0 or gamma > 1.0:
-        raise ValueError(f"Invalid gamma: {gamma}. Should be in range (0, 1].")
-
-    returns = deque(maxlen=len(rewards))
-    discounted_return = 0
-    for r in reversed(rewards):
-        discounted_return = r + gamma * discounted_return
-        # Using deque to prepend in O(1) to keep the returns in chronological order.
-        returns.appendleft(discounted_return)
-
-    # Standardize the returns to make the training more stable
-    returns = torch.tensor(returns, device=device, dtype=torch.float32)
-    if normalize:
-        eps = np.finfo(np.float32).eps.item()  # Guard against division by zero (std=0)
-        mean, std = returns.mean(), returns.std()
-        returns = (returns - mean) / (std + eps)
-        return returns, mean, std
-
-    return returns
-
-
-def gradient_norm(model) -> float:
-    """Compute the gradient L2 norm of the model."""
-    total_norm = 0
-    for p in model.parameters():
-        param_norm = p.grad.detach().data.norm(2)
-        total_norm += param_norm.item() ** 2
-    total_norm = total_norm**0.5
-    return total_norm
 
 
 # Plotting utilities
