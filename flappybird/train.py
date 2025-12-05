@@ -12,7 +12,7 @@ from rich.pretty import pprint
 
 from agents import ReinforceAgent, collect_episode, make_env
 from configs import TrainConfig
-from utils import log_config_to_mlflow, save_model_with_mlflow, set_seeds
+from utils import log_config_to_mlflow, log_results_to_mlflow, save_model_with_mlflow, set_seeds
 
 # TODO: make upload to HF as another command
 # TODO: add switch to turn off mlflow logging
@@ -35,6 +35,7 @@ def train(
         cfg.env_id,
         render_mode="rgb_array",
         max_episode_steps=cfg.max_episode_steps,
+        stack_size=cfg.frame_stack,
         record_stats=True,
         video_folder="videos/train",
         episode_trigger=lambda e: e % cfg.record_every == 0 if cfg.record_every else None,
@@ -42,9 +43,6 @@ def train(
     )
 
     # Set seeds for reproducibility
-    # TODO: training should be repeated over several seeds and average the results
-    # This needs however, training one model per seed, averaging the results across models and saving the best one
-    # mlflow.start_run(nested=True) for child runs
     set_seeds(cfg.seed)
 
     # Set up the agent
@@ -57,14 +55,10 @@ def train(
 
         log_config_to_mlflow(cfg)
 
-        # TODO: extract into train_loop(policy, env, optimizer, scheduler, cfg)
-        # for seed in cfg.seeds:
-        #     train_loop(policy, env, optimizer, scheduler, cfg, seed)
-
         for i_episode in range(cfg.n_episodes):
             # Collect experience over one episode
             seed = cfg.seed if cfg.seed_fixed else cfg.seed + i_episode
-            summed_reward, info = collect_episode(agent, env, seed)
+            info = collect_episode(agent, env, seed)
 
             # Episode batching: average loss over several episodes and update only once
             if not batching or (i_episode + 1) % cfg.batch_size == 0:
@@ -73,25 +67,7 @@ def train(
 
             # Assumes log_every > batch_size: log w/ lower frequency than update => the logged vars are available
             if (i_episode + 1) % cfg.log_every == 0:
-                print(
-                    f"Episode {i_episode + 1:> 6d} | Reward Sum: {summed_reward:> 10.4f} | "
-                    f"Loss: {result.loss:> 10.4f} | Entropy: {result.entropy_term:> .2e} | "
-                    f"LR: {result.last_lr:> .4e}"
-                )
-
-                mlflow.log_metric("train/loss/total", result.loss, step=i_episode)
-                mlflow.log_metric("train/loss/entropy_term", result.entropy_term, step=i_episode)
-                # Policy stats
-                mlflow.log_metric("train/policy/return_mean", result.returns_mean, step=i_episode)
-                mlflow.log_metric("train/policy/return_std", result.returns_std, step=i_episode)
-                mlflow.log_metric("train/policy/learning_rate", result.last_lr, step=i_episode)
-                mlflow.log_metric("train/policy/gradient_norm", result.grad_norm, step=i_episode)
-                if "episode" in info:
-                    mlflow.log_metric("train/episode/reward", info["episode"]["r"], step=i_episode)
-                    mlflow.log_metric("train/episode/length", info["episode"]["l"], step=i_episode)
-                    mlflow.log_metric(
-                        "train/episode/duration", info["episode"]["t"], step=i_episode
-                    )
+                log_results_to_mlflow(result, info, i_episode)
 
         # Log summary metrics
         return_queue = env.get_wrapper_attr("return_queue")

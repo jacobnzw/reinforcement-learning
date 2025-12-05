@@ -10,14 +10,29 @@ import json
 import random
 import tempfile
 from collections import deque
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 import imageio
+import matplotlib.pyplot as plt
 import mlflow
 import numpy as np
+import seaborn as sns
 import torch
 from huggingface_hub import HfApi, login
 from huggingface_hub.repocard import metadata_eval_result, metadata_save
+
+
+@dataclass
+class UpdateResult:
+    """Result of a policy update."""
+
+    loss: float
+    entropy_term: float
+    returns_mean: float
+    returns_std: float
+    grad_norm: float
+    last_lr: float
 
 
 def evaluate_agent(env, max_steps, n_eval_episodes, policy):
@@ -195,29 +210,17 @@ def push_to_hub(repo_id, env_id, model, hyperparameters, eval_env, video_fps=30)
 def log_config_to_mlflow(config):
     """Log config to MLflow."""
 
-    HPARAM_KEYS = [
-        "gamma",
-        "entropy_coeff",
-        "learning_rate",
-        "target_learning_rate",
-        "batch_size",
-        "max_grad_norm",
-        "hidden_dim",
-        "n_episodes",
-        "seed",
-    ]
+    IGNORE_KEYS = ["max_episode_steps", "log_every", "record_every"]
     TAG_KEYS = ["env_id", "seed_fixed"]
 
     # Log the full set of hyperparameters
-    for key in HPARAM_KEYS:
-        if hasattr(config, key):
-            mlflow.log_param(key, getattr(config, key))
+    for field in fields(config):
+        if field.name not in (IGNORE_KEYS + TAG_KEYS):
+            mlflow.log_param(field.name, getattr(config, field.name))
 
     # Log the rest as descriptive tags (Context)
     for key in TAG_KEYS:
-        if hasattr(config, key):
-            # Tags must be strings, and are great for searching/filtering
-            mlflow.set_tag(key, str(getattr(config, key)))
+        mlflow.set_tag(key, getattr(config, key))
 
 
 def save_model_with_mlflow(model, model_name="flappybird_reinforce"):
@@ -255,6 +258,34 @@ def load_model_with_mlflow(run_id, model_name="flappybird_reinforce", device=Non
 
     print(f"Loaded model from MLflow URI: {model_uri}")
     return model
+
+
+def log_results_to_mlflow(result: UpdateResult, info: dict, i_episode: int):
+    print(
+        f"Episode {i_episode + 1:> 6d} | Reward Sum: {info['summed_reward']:> 10.4f} | "
+        f"Loss: {result.loss:> 10.4f} | Entropy: {result.entropy_term:> .2e} | "
+        f"LR: {result.last_lr:> .4e}"
+    )
+
+    metrics = {
+        "loss/total": result.loss,
+        "loss/entropy_term": result.entropy_term,
+        "policy/return_mean": result.returns_mean,
+        "policy/return_std": result.returns_std,
+        "policy/learning_rate": result.last_lr,
+        "policy/gradient_norm": result.grad_norm,
+    }
+
+    if "episode" in info:
+        metrics.update(
+            {
+                "episode/reward": info["episode"]["r"],
+                "episode/length": info["episode"]["l"],
+                "episode/duration": info["episode"]["t"],
+            }
+        )
+
+    mlflow.log_metrics(metrics, step=i_episode)
 
 
 # Mathematical utilities
@@ -316,3 +347,13 @@ def gradient_norm(model) -> float:
         total_norm += param_norm.item() ** 2
     total_norm = total_norm**0.5
     return total_norm
+
+
+# Plotting utilities
+def boxplot_episode_rewards(episode_rewards):
+    """Create a boxplot of episode rewards."""
+    fig, ax = plt.subplots(figsize=(4, 6))
+    sns.boxplot(y=episode_rewards, ax=ax)
+    ax.set_ylabel("Episode Reward")
+    ax.set_title("Distribution of Episode Rewards")
+    return fig

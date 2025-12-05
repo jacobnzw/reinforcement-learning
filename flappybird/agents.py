@@ -4,18 +4,18 @@ This module contains all RL agents and policy networks for training
 agents to play FlappyBird.
 """
 
-from dataclasses import dataclass
 from typing import Callable
 
 import flappy_bird_gymnasium  # noqa: F401
 import gymnasium as gym
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.distributions import Categorical
 
-from utils import compute_returns, gradient_norm, load_model_with_mlflow
+from utils import UpdateResult, compute_returns, gradient_norm, load_model_with_mlflow
 
 device = torch.accelerator.current_accelerator()
 
@@ -112,16 +112,6 @@ class FlappyBirdStatePolicy(nn.Module):
         return self.fc_stack(x)
 
 
-@dataclass
-class UpdateResult:
-    loss: float
-    entropy_term: float
-    returns_mean: float
-    returns_std: float
-    grad_norm: float
-    last_lr: float
-
-
 def make_env(
     env_id,
     render_mode="rgb_array",
@@ -184,6 +174,10 @@ class ReinforceAgent:
 
     def act(self, state, deterministic=False):
         """Select an action given the state."""
+
+        # when frame stacking, state[0] stores game states as a LazyFrame instance
+        if self.cfg.frame_stack > 1:
+            state = state[0][:].reshape(-1)
 
         state = torch.from_numpy(state).float().unsqueeze(0).to(device)
         logits = self.policy_net.forward(state)
@@ -310,4 +304,5 @@ def collect_episode(agent, env, seed):
 
         summed_reward = agent.observe(reward, episode_over)
 
-    return summed_reward, info
+    info["summed_reward"] = summed_reward
+    return info

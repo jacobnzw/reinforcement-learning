@@ -11,9 +11,11 @@ import tyro
 
 from agents import ReinforceAgent, make_env
 from configs import EvalConfig
+from utils import log_config_to_mlflow, boxplot_episode_rewards
 
 # MLflow setup
 mlflow.set_tracking_uri("http://localhost:5000")  # default mlflow server host:port
+mlflow.set_experiment(experiment_name="flappybird_reinforce_hparam_tuning")
 
 
 def eval(
@@ -36,39 +38,45 @@ def eval(
     )
 
     with mlflow.start_run(run_id=run_id):
-        with torch.no_grad():
-            episode_rewards = []
-            for episode in range(cfg.n_episodes):
-                # Each episode has predictable seed for reproducible evaluation
-                # making sure policy can cope with env stochasticity
-                seed = cfg.seed if cfg.seed_fixed else cfg.seed + episode
-                state, _ = env.reset(seed=seed)
-                done = False
-                while not done:
-                    action = agent.act(state, deterministic=not cfg.stochastic)
-                    state, reward, terminated, truncated, info = env.step(action.item())
-                    done = terminated or truncated
+        with mlflow.start_run(nested=True):
+            log_config_to_mlflow(cfg)
+            with torch.no_grad():
+                episode_rewards = []
+                for episode in range(cfg.n_episodes):
+                    # Each episode has predictable seed for reproducible evaluation
+                    # making sure policy can cope with env stochasticity
+                    seed = cfg.seed if cfg.seed_fixed else cfg.seed + episode
+                    state, _ = env.reset(seed=seed)
+                    done = False
+                    while not done:
+                        action = agent.act(state, deterministic=not cfg.stochastic)
+                        state, reward, terminated, truncated, info = env.step(action.item())
+                        done = terminated or truncated
 
-                # Extract episode statistics from info (available after episode ends)
-                if "episode" in info:
-                    episode_reward = info["episode"]["r"][0]
-                    episode_length = info["episode"]["l"][0]
-                    episode_rewards.append(episode_reward)
-                    print(
-                        f"Episode {episode:> 6d} | Reward: {episode_reward:> 6.2f} | Length: {episode_length:> 6d}"
-                    )
-                    mlflow.log_metric("eval/episode_reward", episode_reward, step=episode)
-                    mlflow.log_metric("eval/episode_length", episode_length, step=episode)
+                    # Extract episode statistics from info (available after episode ends)
+                    if "episode" in info:
+                        episode_reward = info["episode"]["r"][0]
+                        episode_length = info["episode"]["l"][0]
+                        episode_rewards.append(episode_reward)
+                        print(
+                            f"Episode {episode:> 6d} | Score: {info['score']} | "
+                            f"Reward: {episode_reward:> 6.2f} | Length: {episode_length:> 6d}"
+                        )
+                        mlflow.log_metric("episode/reward", episode_reward, step=episode)
+                        mlflow.log_metric("episode/length", episode_length, step=episode)
+                        # Log game score
+                        mlflow.log_metric("episode/score", info["score"], step=episode)
 
-        if episode_rewards:
-            mean_reward = np.mean(episode_rewards)
-            std_reward = np.std(episode_rewards)
-            print(
-                f"\nMean reward over {len(episode_rewards)} episodes: {mean_reward:.2f} +/- {std_reward:.2f}"
-            )
-            # TODO: log a seaborn boxplot of episode rewards
-            mlflow.log_metric("eval_mean_reward", mean_reward, step=0)
-            mlflow.log_metric("eval_std_reward", std_reward, step=0)
+            if episode_rewards:
+                mean_reward = np.mean(episode_rewards)
+                std_reward = np.std(episode_rewards)
+                print(
+                    f"\nMean reward over {len(episode_rewards)} episodes: {mean_reward:.2f} +/- {std_reward:.2f}"
+                )
+
+                # Create and log boxplot of episode rewards
+                fig = boxplot_episode_rewards(episode_rewards)
+                mlflow.log_figure(fig, "episode_rewards_boxplot.png")
 
     env.close()
 
