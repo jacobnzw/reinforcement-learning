@@ -264,7 +264,7 @@ def log_results_to_mlflow(result: UpdateResult, info: dict, i_episode: int):
     print(
         f"Episode {i_episode + 1:> 6d} | Reward Sum: {info['summed_reward']:> 10.4f} | "
         f"Loss: {result.loss:> 10.4f} | Entropy: {result.entropy_term:> .2e} | "
-        f"LR: {result.last_lr:> .4e}"
+        f"LR: {result.last_lr:> .2e}"
     )
 
     metrics = {

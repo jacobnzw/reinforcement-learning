@@ -184,14 +184,16 @@ class ReinforceAgent:
             state = state[0][:].reshape(-1)
 
         state = torch.from_numpy(state).float().unsqueeze(0).to(device)
-        logits = self.policy_net.forward(state)
+        with torch.no_grad():
+            logits = self.policy_net.forward(state)
 
         # convert probs to a categorical distribution and sample the action from it
         dist = Categorical(logits=logits)
         action = dist.sample() if not deterministic else dist.mode
 
-        self.log_probs.append(dist.log_prob(action))
-        self.logits.append(logits)
+        if not deterministic:  # store only during training (=stochastic policy)
+            self.log_probs.append(dist.log_prob(action))
+            self.logits.append(logits)
 
         return action
 
@@ -229,13 +231,10 @@ class ReinforceAgent:
         loss = -torch.cat(self.batch_log_probs) @ returns
 
         # Add the entropy term if specified
-        entropy_term = (
-            self.cfg.entropy_coeff
-            * Categorical(logits=torch.cat(self.batch_logits)).entropy().sum()
-            if self.cfg.entropy_coeff
-            else 0.0
-        )
-        loss += entropy_term
+        if self.cfg.entropy_coeff:
+            entropy_term = Categorical(logits=torch.cat(self.batch_logits)).entropy().sum()
+            loss -= self.cfg.entropy_coeff * entropy_term
+
         # average loss over the episode batch; divide by 1 if not batching
         loss /= len(self.batch_returns)
         loss.backward()

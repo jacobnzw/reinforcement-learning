@@ -58,8 +58,8 @@ def eval(
                         episode_length = info["episode"]["l"][0]
                         episode_rewards.append(episode_reward)
                         print(
-                            f"Episode {episode:> 6d} | Score: {info['score']} | "
-                            f"Reward: {episode_reward:> 6.2f} | Length: {episode_length:> 6d}"
+                            f"Episode {episode:> 3d} | Score: {info['score']:> 3d} | "
+                            f"Reward: {episode_reward:> 6.2f} | Length: {episode_length:> 4d}"
                         )
                         mlflow.log_metric("episode/reward", episode_reward, step=episode)
                         mlflow.log_metric("episode/length", episode_length, step=episode)
