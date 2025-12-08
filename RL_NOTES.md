@@ -327,7 +327,7 @@ A problem with computing the return $G_t$, is that we need to wait until the end
 - don't use return value $G_t$
 - relies on temporal differences to estimate the advantage function
 
-Generalize advantage estimation (GAE) is a technique for reducing the variance of the advantage estimate. It uses a moving average of the advantage estimates to get a more stable estimate.
+[**Generalized advantage estimation (GAE)**](https://cameronrwolfe.substack.com/i/175107358/generalized-advantage-estimation-gae) is a technique for reducing the variance of the advantage estimate. It uses a moving average of the advantage estimates to get a more stable estimate.
 
 Modelling the policy $\pi_\theta(a | s)$:
 - **Categorical distribution** for discrete action spaces. This might be implemented as a softmax layer on top of a linear layer, where the softmax is given by
@@ -412,6 +412,12 @@ Because most algorithms use exploration noise during training, you need a separa
 [Open AI Spining Up](https://spinningup.openai.com/en/latest/) Best for grasping the terminology, basic concepts and intuitions. For example, has best explained definition of the quality function Q and what it means to "... thereafter follow policy $\pi$", which I had trouble with initially.
 
 [CleanRL](https://docs.cleanrl.dev/) Explanatory clean implementations of RL algorithms. "Every detail about an algorithm variant is put into a single standalone file."
+
+[RLHF Book](https://rlhfbook.com/c/11-policy-gradients.html) Policy gradient methods for LLMs.
+
+[PPO for LLMs: Guide for Normal People](https://cameronrwolfe.substack.com/p/ppo-llm) Cameron Wolfe's blog post on PPO for LLMs.
+
+[Grokking Deep RL](https://github.com/mimoralea/gdrl) Repo w/ notebooks that accompany the book "Grokking Deep Reinforcement Learning"
 
 [Yandex Practical RL](https://github.com/yandexdataschool/Practical_RL/tree/master) Didn't do it, but looks like it covers more advanced and cutting-endge topics. Is more self-led, requires more initiative and dedication (eg. reading a chapter in Sutton's book).
 
