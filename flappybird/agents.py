@@ -184,8 +184,7 @@ class ReinforceAgent:
             state = state[0][:].reshape(-1)
 
         state = torch.from_numpy(state).float().unsqueeze(0).to(device)
-        with torch.no_grad():
-            logits = self.policy_net.forward(state)
+        logits = self.policy_net.forward(state)
 
         # convert probs to a categorical distribution and sample the action from it
         dist = Categorical(logits=logits)
@@ -266,9 +265,7 @@ class ReinforceAgent:
         )
 
 
-def prepare_policy_model(cfg, run_id=None, device=None):
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def prepare_policy_model(cfg, run_id=None):
     if run_id:
         return load_model_with_mlflow(run_id, FlappyBirdStatePolicy, device)
     else:
