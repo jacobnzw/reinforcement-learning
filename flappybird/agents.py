@@ -255,9 +255,9 @@ class ReinforceAgent:
 
         return UpdateResult(
             loss=loss.item(),
-            entropy_term=entropy_term.item()
-            if isinstance(entropy_term, torch.Tensor)
-            else entropy_term,
+            entropy_term=self.cfg.entropy_coeff * entropy_term.item()
+            if self.cfg.entropy_coeff
+            else 0.0,
             returns_mean=returns_mean.item(),
             returns_std=returns_std.item(),
             grad_norm=grad_norm,
