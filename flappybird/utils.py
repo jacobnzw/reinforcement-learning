@@ -27,6 +27,7 @@ class UpdateResult:
     """Result of a policy update."""
 
     loss: float
+    value_loss: float | None = None
     entropy_term: float
     returns_mean: float
     returns_std: float
@@ -223,6 +224,7 @@ def log_config_to_mlflow(config):
     mlflow.set_tag("env_id", config.env.env_id)
 
 
+# TODO: drop try-except; move to agents.py due to circular import of FlappyBirdStatePolicy
 def save_model_with_mlflow(model, model_name="flappybird_reinforce"):
     """Saves model using MLflow.
 
@@ -260,6 +262,7 @@ def load_model_with_mlflow(run_id, model_name="flappybird_reinforce", device=Non
     return model
 
 
+# TODO: drop the type hint, move UpdateResults to agents.py
 def log_results_to_mlflow(result: UpdateResult, info: dict, i_episode: int):
     print(
         f"Episode {i_episode + 1:> 6d} | Reward Sum: {info['summed_reward']:> 10.4f} | "

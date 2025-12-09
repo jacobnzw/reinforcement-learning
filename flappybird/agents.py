@@ -265,6 +265,163 @@ class ReinforceAgent:
         )
 
 
+class VanillaPolicyGradientAgent:
+    """Vanilla Policy Gradient Agent.
+
+    REINFORCE with learned value function baseline.
+    """
+
+    def __init__(self, cfg, run_id=None, eval_mode=False):
+        if eval_mode:
+            if run_id is None:
+                raise ValueError("Run ID must be specified in eval mode")
+            self.cfg = cfg
+            self.policy_net = load_model_with_mlflow(run_id, device=device)
+            self.value_net = load_model_with_mlflow(
+                run_id, model_name="flappybird_value", device=device
+            )
+        else:
+            self.cfg = cfg
+            self.batching = cfg.batch_size is not None and cfg.batch_size > 1
+            self.grad_clipping = cfg.max_grad_norm is not None and cfg.max_grad_norm > 0.0
+
+            # Set up policy network
+            self.policy_net = prepare_policy_model(cfg, run_id)
+            self.policy_optimizer = optim.AdamW(self.policy_net.parameters(), lr=cfg.learning_rate)
+            # Set up LR scheduler to decay from initial to target learning rate by the end of training
+            n_scheduler_steps = (
+                cfg.n_episodes // cfg.batch_size if self.batching else cfg.n_episodes
+            )
+            # Ensure we have at least 1 scheduler step to avoid division by zero
+            n_scheduler_steps = max(1, n_scheduler_steps)
+            gamma = (cfg.target_learning_rate / cfg.learning_rate) ** (1 / n_scheduler_steps)
+            self.policy_scheduler = optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=gamma)
+
+            # Set up value network
+            self.value_net = prepare_value_model(cfg, run_id)
+            self.value_optimizer = optim.AdamW(self.value_net.parameters(), lr=cfg.learning_rate)
+
+            # batch history buffers
+            self.batch_log_probs = []
+            self.batch_logits = []
+            self.batch_returns = []
+            self.batch_values = []
+
+        # episode history buffers
+        self.log_probs = []
+        self.logits = []
+        self.rewards = []
+        self.values = []
+
+    def act(self, state, deterministic=False):
+        """Select an action given the state."""
+
+        # when frame stacking, state[0] stores game states as a LazyFrame instance
+        if self.cfg.env.frame_stack > 1:
+            state = state[0][:].reshape(-1)
+
+        state = torch.from_numpy(state).float().unsqueeze(0).to(device)
+        logits = self.policy_net.forward(state)
+        value = self.value_net.forward(state)
+
+        # convert probs to a categorical distribution and sample the action from it
+        dist = Categorical(logits=logits)
+        action = dist.sample() if not deterministic else dist.mode
+
+        if not deterministic:  # store only during training (=stochastic policy)
+            self.log_probs.append(dist.log_prob(action))
+            self.logits.append(logits)
+            self.values.append(value)
+
+        return action
+
+    def observe(self, reward, episode_end=False):
+        self.rewards.append(reward)
+        summed_reward = None
+        if episode_end:
+            # Compute and store the returns
+            returns = compute_returns(self.rewards, self.cfg.gamma, normalize=False, device=device)
+            self.batch_returns.append(returns)
+            self.batch_log_probs.append(torch.cat(self.log_probs))
+            self.batch_logits.append(torch.cat(self.logits))
+            self.batch_values.append(torch.cat(self.values))
+
+            summed_reward = sum(self.rewards)
+
+            # Clear the episode buffers
+            self.rewards.clear()
+            self.log_probs.clear()
+            self.logits.clear()
+            self.values.clear()
+
+        return summed_reward
+
+    def _update_policy_net(self, returns):
+        # Calculate the policy loss
+        loss = -torch.cat(self.batch_log_probs) @ returns
+
+        # Add the entropy term if specified
+        if self.cfg.entropy_coeff:
+            entropy_term = Categorical(logits=torch.cat(self.batch_logits)).entropy().sum()
+            loss -= self.cfg.entropy_coeff * entropy_term
+
+        # Average loss over the episode batch; divide by 1 if not batching
+        loss /= len(self.batch_returns)
+        self.policy_optimizer.zero_grad()
+        loss.backward()
+
+        if self.grad_clipping:
+            torch.nn.utils.clip_grad_norm_(
+                self.policy_net.parameters(), max_norm=self.cfg.max_grad_norm
+            )
+        grad_norm = gradient_norm(self.policy_net)
+
+        # Update parameters and clear gradients
+        self.policy_optimizer.step()
+        self.policy_scheduler.step()
+
+        entropy = self.cfg.entropy_coeff * entropy_term.item() if self.cfg.entropy_coeff else 0.0
+        return loss.item(), entropy, grad_norm
+
+    def _updae_value_net(self, returns):
+        # MSE as value loss
+        values = torch.cat(self.batch_values)
+        # Approximate: should really sum episode MSEs and divide by batch size
+        loss = torch.mean((returns - values) ** 2) / len(self.batch_values)
+
+        self.value_optimizer.zero_grad()
+        loss.backward()
+        self.value_optimizer.step()
+
+        return loss.item()
+
+    def update(self) -> UpdateResult:
+        """Update the policy network's weights based on episode history."""
+
+        # Stack the batch returns and normalize them
+        returns = torch.cat(self.batch_returns)
+        returns_mean, returns_std = returns.mean(), returns.std()
+        returns = (returns - returns_mean) / (returns_std + 1e-8)
+
+        loss, entropy_term, grad_norm = self._update_policy_net(returns)
+        value_loss = self._update_value_net(returns)
+
+        # Clear history buffers
+        self.batch_returns.clear()
+        self.batch_log_probs.clear()
+        self.batch_logits.clear()
+
+        return UpdateResult(
+            loss=loss,
+            value_loss=value_loss,
+            entropy_term=entropy_term,
+            returns_mean=returns_mean.item(),
+            returns_std=returns_std.item(),
+            grad_norm=grad_norm,
+            last_lr=self.scheduler.get_last_lr()[0],
+        )
+
+
 def prepare_policy_model(cfg, run_id=None):
     if run_id:
         return load_model_with_mlflow(run_id, FlappyBirdStatePolicy, device)
