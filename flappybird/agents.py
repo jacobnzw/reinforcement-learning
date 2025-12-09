@@ -363,6 +363,8 @@ class VanillaPolicyGradientAgent:
 
     def _update_policy_net(self, advantages: torch.Tensor):
         # Calculate the policy loss
+        adv_mean, adv_std = advantages.mean(), advantages.std()
+        advantages = (advantages - adv_mean) / (adv_std + 1e-8)
         loss = -torch.cat(self.batch_log_probs) @ advantages
 
         # Add the entropy term if specified

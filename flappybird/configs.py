@@ -33,7 +33,7 @@ class TrainConfig:
 
     # Value function settings
     vf_learning_rate: float = 1e-4  # value function learning rate
-    vf_hidden_dim: float = 64  # value function hidden dimension
+    vf_hidden_dim: float = 128  # value function hidden dimension
 
     # Reproducibility
     seed: int = 42
