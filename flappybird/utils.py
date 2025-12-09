@@ -22,19 +22,6 @@ from huggingface_hub import HfApi, login
 from huggingface_hub.repocard import metadata_eval_result, metadata_save
 
 
-@dataclass
-class UpdateResult:
-    """Result of a policy update."""
-
-    loss: float
-    value_loss: float | None = None
-    entropy_term: float
-    returns_mean: float
-    returns_std: float
-    grad_norm: float
-    last_lr: float
-
-
 # Hugging Face Hub utilities
 def evaluate_agent(env, max_steps, n_eval_episodes, policy):
     """
@@ -222,73 +209,6 @@ def log_config_to_mlflow(config):
     # Log the rest as descriptive tags
     mlflow.set_tag("seed_fixed", config.seed_fixed)
     mlflow.set_tag("env_id", config.env.env_id)
-
-
-# TODO: drop try-except; move to agents.py due to circular import of FlappyBirdStatePolicy
-def save_model_with_mlflow(model, model_name="flappybird_reinforce"):
-    """Saves model using MLflow.
-
-    Model move to CPU prior to saving for compatibility.
-    """
-    try:
-        from .agents import FlappyBirdStatePolicy
-    except ImportError:
-        from agents import FlappyBirdStatePolicy
-
-    # Log the model (Model Artifact)
-    model_info = mlflow.pytorch.log_model(
-        pytorch_model=model.cpu(),
-        input_example=np.random.rand(1, FlappyBirdStatePolicy.state_dim).astype(
-            np.float32
-        ),  # infers model signature automatically
-        name=model_name,
-        registered_model_name=model_name,
-    )
-
-    print(f"\nModel saved at URI: {model_info.model_uri}")
-    print(f"RUN ID: {model_info.run_id}")
-
-
-def load_model_with_mlflow(run_id, model_name="flappybird_reinforce", device=None):
-    """Load model from MLflow."""
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Load model from MLflow
-    model_uri = f"runs:/{run_id}/{model_name}"
-    model = mlflow.pytorch.load_model(model_uri, map_location=device)
-
-    print(f"Loaded model from MLflow URI: {model_uri}")
-    return model
-
-
-# TODO: drop the type hint, move UpdateResults to agents.py
-def log_results_to_mlflow(result: UpdateResult, info: dict, i_episode: int):
-    print(
-        f"Episode {i_episode + 1:> 6d} | Reward Sum: {info['summed_reward']:> 10.4f} | "
-        f"Loss: {result.loss:> 10.4f} | Entropy: {result.entropy_term:> .2e} | "
-        f"LR: {result.last_lr:> .2e}"
-    )
-
-    metrics = {
-        "loss/total": result.loss,
-        "loss/entropy_term": result.entropy_term,
-        "policy/return_mean": result.returns_mean,
-        "policy/return_std": result.returns_std,
-        "policy/learning_rate": result.last_lr,
-        "policy/gradient_norm": result.grad_norm,
-    }
-
-    if "episode" in info:
-        metrics.update(
-            {
-                "episode/reward": info["episode"]["r"],
-                "episode/length": info["episode"]["l"],
-                "episode/duration": info["episode"]["t"],
-            }
-        )
-
-    mlflow.log_metrics(metrics, step=i_episode)
 
 
 # Mathematical utilities

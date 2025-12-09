@@ -24,12 +24,16 @@ class TrainConfig:
     # Training settings
     n_episodes: int = 5_000
     hidden_dim: int = 128
-    gamma: float = 0.99
+    gamma: float = 0.95
     entropy_coeff: float = 0.01
     learning_rate: float = 1e-2  # initial learning rate decays to target_learning_rate
     target_learning_rate: float = 1e-4
     batch_size: Optional[int] = 25  # None or 0 to disable gradient accumulation
     max_grad_norm: Optional[float] = 5.0  # None or 0.0 to disable gradient clipping
+
+    # Value function settings
+    vf_learning_rate: float = 1e-4  # value function learning rate
+    vf_hidden_dim: float = 64  # value function hidden dimension
 
     # Reproducibility
     seed: int = 42

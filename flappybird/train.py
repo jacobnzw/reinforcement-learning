@@ -9,10 +9,18 @@ from typing import Optional
 import mlflow
 import tyro
 from rich.pretty import pprint
+from tqdm import tqdm
 
-from agents import ReinforceAgent, collect_episode, make_env
+from agents import (
+    ReinforceAgent,  # noqa: F401
+    VanillaPolicyGradientAgent,
+    collect_episode,
+    log_results_to_mlflow,
+    make_env,
+    save_agent_with_mlflow,
+)
 from configs import TrainConfig
-from utils import log_config_to_mlflow, log_results_to_mlflow, save_model_with_mlflow, set_seeds
+from utils import log_config_to_mlflow, set_seeds
 
 # TODO: make upload to HF as another command
 
@@ -28,7 +36,6 @@ def train(
     """Train using REINFORCE algorithm. A basic policy gradient method."""
 
     batching = cfg.batch_size is not None and cfg.batch_size > 1
-    grad_clipping = cfg.max_grad_norm is not None and cfg.max_grad_norm > 0.0
 
     env = make_env(
         cfg.env,
@@ -42,7 +49,8 @@ def train(
     set_seeds(cfg.seed)
 
     # Set up the agent
-    agent = ReinforceAgent(cfg, run_id)
+    # agent = ReinforceAgent(cfg, run_id)
+    agent = VanillaPolicyGradientAgent(cfg, run_id)
 
     with mlflow.start_run() as run:
         print("\nTraining Flappy with REINFORCE...\n")
@@ -51,7 +59,11 @@ def train(
 
         log_config_to_mlflow(cfg)
 
-        for i_episode in range(cfg.n_episodes):
+        tqdm.write(
+            f"{'Episode':>8s} | {'Reward':>8s} | {'Loss (P)':>8s} | {'Loss (V)':>8s} | "
+            f"{'Entropy':>9s} | {'LR':>8s}"
+        )
+        for i_episode in tqdm(range(cfg.n_episodes), desc="Training", unit="ep"):
             # Collect experience over one episode
             seed = cfg.seed if cfg.seed_fixed else cfg.seed + i_episode
             info = collect_episode(agent, env, seed)
@@ -59,7 +71,7 @@ def train(
             # Episode batching: average loss over several episodes and update only once
             if not batching or (i_episode + 1) % cfg.batch_size == 0:
                 # Agent has collected enough experience to learn, do a policy update
-                result = agent.update(grad_clipping)
+                result = agent.update()
 
             # Assumes log_every > batch_size: log w/ lower frequency than update => the logged vars are available
             if (i_episode + 1) % cfg.log_every == 0:
@@ -68,9 +80,9 @@ def train(
         # Log summary metrics
         return_queue = env.get_wrapper_attr("return_queue")
         mlflow.log_metric(f"max_reward_last_{return_queue.maxlen}_episodes", max(return_queue))
-        mlflow.log_param("optimizer", agent.optimizer.__class__.__name__)
+        mlflow.log_param("policy_optimizer", agent.policy_optimizer.__class__.__name__)
 
-        save_model_with_mlflow(agent.policy_net)
+        save_agent_with_mlflow(agent, model_name="flappybird_vpg")
         env.close()
 
 

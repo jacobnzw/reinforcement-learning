@@ -73,6 +73,8 @@ def eval(
                     f"\nMean reward over {len(episode_rewards)} episodes: {mean_reward:.2f} +/- {std_reward:.2f}"
                 )
 
+                # TODO: log mean and std reward as metrics
+                # TODO: copy training parameters to the eval run for easy comparison
                 # Create and log boxplot of episode rewards
                 fig = boxplot_episode_rewards(episode_rewards)
                 mlflow.log_figure(fig, "episode_rewards_boxplot.png")

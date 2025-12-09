@@ -5,73 +5,35 @@ agents to play FlappyBird.
 """
 
 from collections import deque
+from dataclasses import dataclass
 from typing import Callable
 
 import flappy_bird_gymnasium  # noqa: F401
 import gymnasium as gym
+import mlflow
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 from torch.distributions import Categorical
+from tqdm import tqdm
 
 from configs import EnvConfig
-from utils import UpdateResult, load_model_with_mlflow
 
 device = torch.accelerator.current_accelerator()
 
 
-class FlappyBirdImagePolicy(nn.Module):
-    """Network represeting the agent's policy $\pi_\theta(a | s)$."""
+@dataclass
+class UpdateResult:
+    """Result of a policy update."""
 
-    INPUT_HW = (84, 84)  # (800, 576)
-
-    def __init__(self, frame_stack, action_dim):
-        super(FlappyBirdImagePolicy, self).__init__()
-
-        self.conv_stack = nn.Sequential(
-            nn.Conv2d(3 * frame_stack, 32, kernel_size=8, stride=4),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Flatten(),
-        )
-
-        # Figure out the state dimensionality given sample input
-        with torch.no_grad():
-            state_dim = self.conv_stack(torch.zeros(1, 3 * frame_stack, *self.INPUT_HW)).numel()
-        hidden_dim = 512
-
-        self.fc_stack = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, action_dim),
-            nn.Softmax(dim=1),
-        )
-
-    def forward(self, x):
-        return self.fc_stack(self.conv_stack(x))
-
-    def act(self, state):
-        """Select an action from the state."""
-
-        print(f"state.ptp(): {state.ptp()}")
-
-        state = state.transpose(0, 3, 1, 2).reshape(-1, state.shape[1], state.shape[2])
-        state = torch.from_numpy(state).float().unsqueeze(0).to(device)
-        # interpolate expects (B, C, H, W)
-        state = F.interpolate(state, size=self.INPUT_HW, mode="nearest")
-
-        probs = self.forward(state).cpu()
-
-        # convert probs to a categorical distribution and sample the action from it
-        dist = Categorical(probs)
-        action = dist.sample()
-        # return the action and its log probability under categorical distribution
-        return action.item(), dist.log_prob(action)
+    loss: float
+    entropy_term: float
+    grad_norm: float
+    last_lr: float
+    returns_mean: float | None = None
+    returns_std: float | None = None
+    value_loss: float | None = None
 
 
 class FlappyBirdStatePolicy(nn.Module):
@@ -105,6 +67,45 @@ class FlappyBirdStatePolicy(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, self.action_dim),
+        )
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+
+    def forward(self, x):
+        return self.fc_stack(x)
+
+
+class FlappyBirdStateValue(nn.Module):
+    """Network represeting Flappy's policy $V_{\theta}(s)$ that takes in the state.
+
+    The state consists of the following:
+      - the last pipe's horizontal position
+      - the last top pipe's vertical position
+      - the last bottom pipe's vertical position
+      - the next pipe's horizontal position
+      - the next top pipe's vertical position
+      - the next bottom pipe's vertical position
+      - the next next pipe's horizontal position
+      - the next next top pipe's vertical position
+      - the next next bottom pipe's vertical position
+      - player's vertical position
+      - player's vertical velocity
+      - player's rotation
+    """
+
+    state_dim = 12
+    value_dim = 1
+
+    def __init__(self, hidden_dim=32, frame_stack=1):
+        super(FlappyBirdStateValue, self).__init__()
+
+        input_dim = self.state_dim * frame_stack
+        self.fc_stack = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, self.value_dim),
         )
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -276,9 +277,11 @@ class VanillaPolicyGradientAgent:
             if run_id is None:
                 raise ValueError("Run ID must be specified in eval mode")
             self.cfg = cfg
-            self.policy_net = load_model_with_mlflow(run_id, device=device)
+            self.policy_net = load_model_with_mlflow(
+                run_id, model_name="flappybird_vpg_policy", device=device
+            )
             self.value_net = load_model_with_mlflow(
-                run_id, model_name="flappybird_value", device=device
+                run_id, model_name="flappybird_vpg_value", device=device
             )
         else:
             self.cfg = cfg
@@ -286,7 +289,7 @@ class VanillaPolicyGradientAgent:
             self.grad_clipping = cfg.max_grad_norm is not None and cfg.max_grad_norm > 0.0
 
             # Set up policy network
-            self.policy_net = prepare_policy_model(cfg, run_id)
+            self.policy_net = FlappyBirdStatePolicy(hidden_dim=cfg.hidden_dim).to(device)
             self.policy_optimizer = optim.AdamW(self.policy_net.parameters(), lr=cfg.learning_rate)
             # Set up LR scheduler to decay from initial to target learning rate by the end of training
             n_scheduler_steps = (
@@ -295,11 +298,13 @@ class VanillaPolicyGradientAgent:
             # Ensure we have at least 1 scheduler step to avoid division by zero
             n_scheduler_steps = max(1, n_scheduler_steps)
             gamma = (cfg.target_learning_rate / cfg.learning_rate) ** (1 / n_scheduler_steps)
-            self.policy_scheduler = optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=gamma)
+            self.policy_scheduler = optim.lr_scheduler.ExponentialLR(
+                self.policy_optimizer, gamma=gamma
+            )
 
             # Set up value network
-            self.value_net = prepare_value_model(cfg, run_id)
-            self.value_optimizer = optim.AdamW(self.value_net.parameters(), lr=cfg.learning_rate)
+            self.value_net = FlappyBirdStateValue(hidden_dim=cfg.vf_hidden_dim).to(device)
+            self.value_optimizer = optim.AdamW(self.value_net.parameters(), lr=cfg.vf_learning_rate)
 
             # batch history buffers
             self.batch_log_probs = []
@@ -356,9 +361,9 @@ class VanillaPolicyGradientAgent:
 
         return summed_reward
 
-    def _update_policy_net(self, returns):
+    def _update_policy_net(self, advantages: torch.Tensor):
         # Calculate the policy loss
-        loss = -torch.cat(self.batch_log_probs) @ returns
+        loss = -torch.cat(self.batch_log_probs) @ advantages
 
         # Add the entropy term if specified
         if self.cfg.entropy_coeff:
@@ -383,48 +388,48 @@ class VanillaPolicyGradientAgent:
         entropy = self.cfg.entropy_coeff * entropy_term.item() if self.cfg.entropy_coeff else 0.0
         return loss.item(), entropy, grad_norm
 
-    def _updae_value_net(self, returns):
+    def _update_value_net(self, returns: torch.Tensor):
         # MSE as value loss
-        values = torch.cat(self.batch_values)
+        values = torch.cat(self.batch_values).squeeze()
         # Approximate: should really sum episode MSEs and divide by batch size
-        loss = torch.mean((returns - values) ** 2) / len(self.batch_values)
+        advantages = returns - values
+        loss = torch.mean(advantages**2) / len(self.batch_values)
 
         self.value_optimizer.zero_grad()
         loss.backward()
         self.value_optimizer.step()
 
-        return loss.item()
+        return advantages.detach(), loss.item()
 
     def update(self) -> UpdateResult:
         """Update the policy network's weights based on episode history."""
 
-        # Stack the batch returns and normalize them
+        # Stack the batch returns
         returns = torch.cat(self.batch_returns)
-        returns_mean, returns_std = returns.mean(), returns.std()
-        returns = (returns - returns_mean) / (returns_std + 1e-8)
+        # returns_mean, returns_std = returns.mean(), returns.std()
+        # returns = (returns - returns_mean) / (returns_std + 1e-8)
 
-        loss, entropy_term, grad_norm = self._update_policy_net(returns)
-        value_loss = self._update_value_net(returns)
+        advantages, value_loss = self._update_value_net(returns)
+        loss, entropy_term, grad_norm = self._update_policy_net(advantages)
 
         # Clear history buffers
         self.batch_returns.clear()
         self.batch_log_probs.clear()
         self.batch_logits.clear()
+        self.batch_values.clear()
 
         return UpdateResult(
             loss=loss,
             value_loss=value_loss,
             entropy_term=entropy_term,
-            returns_mean=returns_mean.item(),
-            returns_std=returns_std.item(),
             grad_norm=grad_norm,
-            last_lr=self.scheduler.get_last_lr()[0],
+            last_lr=self.policy_scheduler.get_last_lr()[0],
         )
 
 
 def prepare_policy_model(cfg, run_id=None):
     if run_id:
-        return load_model_with_mlflow(run_id, FlappyBirdStatePolicy, device)
+        return load_model_with_mlflow(run_id, "flappybird_reinforce", device)
     else:
         print("No run ID provided. Creating new model.")
         return FlappyBirdStatePolicy(hidden_dim=cfg.hidden_dim).to(device)
@@ -515,3 +520,70 @@ def collect_episode(agent, env, seed):
 
     info["summed_reward"] = summed_reward
     return info
+
+
+def save_agent_with_mlflow(agent, model_name="flappybird_reinforce"):
+    save_model_with_mlflow(agent.policy_net, f"{model_name}_policy")
+    if hasattr(agent, "value_net"):
+        save_model_with_mlflow(agent.value_net, f"{model_name}_value")
+
+
+def save_model_with_mlflow(model, model_name="flappybird_reinforce"):
+    """Saves model using MLflow.
+
+    Model move to CPU prior to saving for compatibility.
+    """
+    # Log the model (Model Artifact)
+    model_info = mlflow.pytorch.log_model(
+        pytorch_model=model.cpu(),
+        input_example=np.random.rand(1, FlappyBirdStatePolicy.state_dim).astype(
+            np.float32
+        ),  # infers model signature automatically
+        name=model_name,
+        registered_model_name=model_name,
+    )
+
+    print(f"\nModel saved at URI: {model_info.model_uri}")
+    print(f"RUN ID: {model_info.run_id}")
+
+
+def load_model_with_mlflow(run_id, model_name="flappybird_reinforce", device=None):
+    """Load model from MLflow."""
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Load model from MLflow
+    model_uri = f"runs:/{run_id}/{model_name}"
+    model = mlflow.pytorch.load_model(model_uri, map_location=device)
+
+    print(f"Loaded model from MLflow URI: {model_uri}")
+    return model
+
+
+def log_results_to_mlflow(result: UpdateResult, info: dict, i_episode: int):
+    tqdm.write(
+        f"{i_episode + 1:> 8d} | {info['summed_reward']:> 8.1f} | "
+        f"{result.loss:> 8.2f} | {result.value_loss:> 8.2f} | "
+        f"{result.entropy_term:> .2e} | {result.last_lr:> .2e}"
+    )
+
+    metrics = {
+        "loss/total": result.loss,
+        "loss/entropy_term": result.entropy_term,
+        "loss/value_loss": result.value_loss if result.value_loss is not None else 0.0,
+        "policy/return_mean": result.returns_mean if result.returns_mean is not None else 0.0,
+        "policy/return_std": result.returns_std if result.returns_std is not None else 0.0,
+        "policy/learning_rate": result.last_lr,
+        "policy/gradient_norm": result.grad_norm,
+    }
+
+    if "episode" in info:
+        metrics.update(
+            {
+                "episode/reward": info["episode"]["r"],
+                "episode/length": info["episode"]["l"],
+                "episode/duration": info["episode"]["t"],
+            }
+        )
+
+    mlflow.log_metrics(metrics, step=i_episode)
