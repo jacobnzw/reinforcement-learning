@@ -312,6 +312,9 @@ class VanillaPolicyGradientAgent:
             self.batch_returns = []
             self.batch_values = []
 
+            self.summed_reward = None
+            self.is_header_printed = False
+
         # episode history buffers
         self.log_probs = []
         self.logits = []
@@ -342,7 +345,6 @@ class VanillaPolicyGradientAgent:
 
     def observe(self, reward, episode_end=False):
         self.rewards.append(reward)
-        summed_reward = None
         if episode_end:
             # Compute and store the returns
             returns = compute_returns(self.rewards, self.cfg.gamma, normalize=False, device=device)
@@ -351,15 +353,13 @@ class VanillaPolicyGradientAgent:
             self.batch_logits.append(torch.cat(self.logits))
             self.batch_values.append(torch.cat(self.values))
 
-            summed_reward = sum(self.rewards)
+            self.summed_reward = sum(self.rewards)
 
             # Clear the episode buffers
             self.rewards.clear()
             self.log_probs.clear()
             self.logits.clear()
             self.values.clear()
-
-        return summed_reward
 
     def _update_policy_net(self, advantages: torch.Tensor):
         # Calculate the policy loss
@@ -403,16 +403,27 @@ class VanillaPolicyGradientAgent:
 
         return advantages.detach(), loss.item()
 
-    def update(self) -> UpdateResult:
+    def print_update_status(self, result: dict, i_episode: int):
+        if not self.is_header_printed:
+            tqdm.write(
+                f"{'Episode':>8s} | {'Reward':>8s} | {'Loss (P)':>8s} | {'Loss (V)':>8s} | "
+                f"{'Entropy':>9s} | {'LR':>8s}"
+            )
+            self.is_header_printed = True
+        tqdm.write(
+            f"{i_episode + 1:> 8d} | {self.summed_reward:> 8.1f} | "
+            f"{result['policy/loss']:> 8.2f} | {result['value/loss']:> 8.2f} | "
+            f"{result['policy/entropy']:> .2e} | {result['policy/learning_rate']:> .2e}"
+        )
+
+    def update(self) -> dict:
         """Update the policy network's weights based on episode history."""
 
         # Stack the batch returns
         returns = torch.cat(self.batch_returns)
-        # returns_mean, returns_std = returns.mean(), returns.std()
-        # returns = (returns - returns_mean) / (returns_std + 1e-8)
 
         advantages, value_loss = self._update_value_net(returns)
-        loss, entropy_term, grad_norm = self._update_policy_net(advantages)
+        loss, entropy, grad_norm = self._update_policy_net(advantages)
 
         # Clear history buffers
         self.batch_returns.clear()
@@ -420,13 +431,13 @@ class VanillaPolicyGradientAgent:
         self.batch_logits.clear()
         self.batch_values.clear()
 
-        return UpdateResult(
-            loss=loss,
-            value_loss=value_loss,
-            entropy_term=entropy_term,
-            grad_norm=grad_norm,
-            last_lr=self.policy_scheduler.get_last_lr()[0],
-        )
+        return {
+            "value/loss": value_loss,
+            "policy/loss": loss,
+            "policy/entropy": entropy,
+            "policy/learning_rate": self.policy_scheduler.get_last_lr()[0],
+            "policy/gradient_norm": grad_norm,
+        }
 
 
 def prepare_policy_model(cfg, run_id=None):
@@ -518,9 +529,8 @@ def collect_episode(agent, env, seed):
         state, reward, terminated, truncated, info = env.step(action.item())
         episode_over = terminated or truncated
 
-        summed_reward = agent.observe(reward, episode_over)
+        agent.observe(reward, episode_over)
 
-    info["summed_reward"] = summed_reward
     return info
 
 
@@ -562,25 +572,9 @@ def load_model_with_mlflow(run_id, model_name="flappybird_reinforce", device=Non
     return model
 
 
-def log_results_to_mlflow(result: UpdateResult, info: dict, i_episode: int):
-    tqdm.write(
-        f"{i_episode + 1:> 8d} | {info['summed_reward']:> 8.1f} | "
-        f"{result.loss:> 8.2f} | {result.value_loss:> 8.2f} | "
-        f"{result.entropy_term:> .2e} | {result.last_lr:> .2e}"
-    )
-
-    metrics = {
-        "loss/total": result.loss,
-        "loss/entropy_term": result.entropy_term,
-        "loss/value_loss": result.value_loss if result.value_loss is not None else 0.0,
-        "policy/return_mean": result.returns_mean if result.returns_mean is not None else 0.0,
-        "policy/return_std": result.returns_std if result.returns_std is not None else 0.0,
-        "policy/learning_rate": result.last_lr,
-        "policy/gradient_norm": result.grad_norm,
-    }
-
+def log_results_to_mlflow(result: dict, info: dict, i_episode: int):
     if "episode" in info:
-        metrics.update(
+        result.update(
             {
                 "episode/reward": info["episode"]["r"],
                 "episode/length": info["episode"]["l"],
@@ -588,4 +582,4 @@ def log_results_to_mlflow(result: UpdateResult, info: dict, i_episode: int):
             }
         )
 
-    mlflow.log_metrics(metrics, step=i_episode)
+    mlflow.log_metrics(result, step=i_episode)

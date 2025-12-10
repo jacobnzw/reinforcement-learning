@@ -59,10 +59,6 @@ def train(
 
         log_config_to_mlflow(cfg)
 
-        tqdm.write(
-            f"{'Episode':>8s} | {'Reward':>8s} | {'Loss (P)':>8s} | {'Loss (V)':>8s} | "
-            f"{'Entropy':>9s} | {'LR':>8s}"
-        )
         for i_episode in tqdm(range(cfg.n_episodes), desc="Training", unit="ep"):
             # Collect experience over one episode
             seed = cfg.seed if cfg.seed_fixed else cfg.seed + i_episode
@@ -75,6 +71,7 @@ def train(
 
             # Assumes log_every > batch_size: log w/ lower frequency than update => the logged vars are available
             if (i_episode + 1) % cfg.log_every == 0:
+                agent.print_update_status(result, i_episode)
                 log_results_to_mlflow(result, info, i_episode)
 
         # Log summary metrics
