@@ -387,7 +387,22 @@ Used in Kober, Peters, Learning Motor Primitives for Robotics, where robot learn
 
 **Inverse RL** is trying to learn the reward function from expert trajectories of state-action pairs and then learn policy that optimizes that reward function. In other words, it's trying to answer the question: "What is the reward function that the expert is optimizing?". Examples include: inverse Q-learning, apprenticeship learning, maximum entropy inverse reinforcement learning (MaxEnt IRL).
 
+### Multi-Task Learning
+In multi-task learning tasks are defined by their goal states.
+Goals can be states, images, or even language, providing rich context for the agent.
 
+#### Goal-Conditioned Reinforcement Learning (GCRL)
+Goal-Conditioned Reinforcement Learning (GCRL) trains a single agent to perform diverse tasks by conditioning its decisions on both its current state and a desired goal, allowing it to achieve various objectives without needing a separate reward function for each, making it great for learning generalist agents in robotics and navigation.
+
+The agent's policy $\pi(a|s,g)$ (action $a$ given state $s$ and goal $g$) and value function $Q(s,a,g)$ are trained to incorporate the goal.
+
+##### Hindsight Experience Replay (HER) 
+is a reinforcement learning technique that lets agents learn from failures in goal-conditioned tasks with sparse rewards by pretending they were trying to achieve what they actually accomplished. When an agent fails to reach its intended goal, HER relabels the experience, treating the state it did reach as the new "desired" goal and recomputing the reward for that new hindsight goal, turning failures into useful learning opportunities. This dramatically improves sample efficiency and makes learning possible in complex environments where rewards are rare.
+
+- Solves Sparse Rewards: In many real-world tasks (like robotics), positive rewards are very infrequent, making learning slow or impossible. HER provides a dense reward signal by generating many "successful" hindsight experiences.
+- Improves Sample Efficiency: Agents learn much faster because every failed attempt provides useful data, effectively making every episode more valuable.
+- No Reward Shaping Needed: It avoids the need for complex, hand-engineered reward functions that might not perfectly align with the true objective.
+- Works with Off-Policy RL: HER can be added to existing off-policy algorithms (like DDPG or SAC) and replay buffers. 
 
 ### Practicalities & Implementation Techniques
 
