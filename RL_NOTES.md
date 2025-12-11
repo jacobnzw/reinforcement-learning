@@ -424,16 +424,22 @@ Because most algorithms use exploration noise during training, you need a separa
 
 # References
 
-[Open AI Spining Up](https://spinningup.openai.com/en/latest/) Best for grasping the terminology, basic concepts and intuitions. For example, has best explained definition of the quality function Q and what it means to "... thereafter follow policy $\pi$", which I had trouble with initially.
+## Introductory
+[Open AI Spining Up](https://spinningup.openai.com/en/latest/) Best for grasping the terminology, basic concepts and intuitions. For example, has best explained definition of the quality function $Q$ and what it means to "... thereafter follow policy $\pi$", which I had trouble with initially.
 
 [CleanRL](https://docs.cleanrl.dev/) Explanatory clean implementations of RL algorithms. "Every detail about an algorithm variant is put into a single standalone file."
-
-[RLHF Book](https://rlhfbook.com/c/11-policy-gradients.html) Policy gradient methods for LLMs.
-
-[PPO for LLMs: Guide for Normal People](https://cameronrwolfe.substack.com/p/ppo-llm) Cameron Wolfe's blog post on PPO for LLMs.
-
-[Grokking Deep RL](https://github.com/mimoralea/gdrl) Repo w/ notebooks that accompany the book "Grokking Deep Reinforcement Learning"
 
 [Yandex Practical RL](https://github.com/yandexdataschool/Practical_RL/tree/master) Didn't do it, but looks like it covers more advanced and cutting-endge topics. Is more self-led, requires more initiative and dedication (eg. reading a chapter in Sutton's book).
 
 [HuggingFace Deep RL Course](https://huggingface.co/learn/deep-rl-course/unit0/introduction) Low-maintainance, notebooks outdated with old dependencies, had to continously struggle with finding the right versions of libraries that work together.
+
+## RL for LLMs
+[RLHF Book](https://rlhfbook.com/c/11-policy-gradients.html) Policy gradient methods for LLMs.
+
+[PPO for LLMs: Guide for Normal People](https://cameronrwolfe.substack.com/p/ppo-llm) Cameron Wolfe's blog post on PPO for LLMs.
+
+
+## Useful Repos
+[Grokking Deep RL](https://github.com/mimoralea/gdrl) Repo w/ notebooks that accompany the book "Grokking Deep Reinforcement Learning"
+
+[Brax](https://github.com/google/brax) Brax is a fast and fully differentiable physics engine used for research and development of robotics, human perception, materials science, reinforcement learning, and other simulation-heavy applications.
