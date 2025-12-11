@@ -52,7 +52,7 @@ def train(
 
     mlflow.set_experiment(experiment_name=f"{model.default_model_name}_hparam_tuning")
     with mlflow.start_run() as run:
-        print("\nTraining Flappy with REINFORCE...\n")
+        print(f"\nTraining Flappy with {model.value.upper()}...\n")
         pprint(cfg)
         print(f"MLflow RUN ID: {run.info.run_id}\n")
 

@@ -27,7 +27,7 @@ def eval(
     """Evaluate the policy."""
     set_seeds(cfg.seed)
     agent = model.agent_class(cfg, run_id, eval_mode=True)
-    print("Evaluating policy...")
+    print(f"Evaluating {model.value.upper()} policy...")
 
     env = make_env(
         cfg.env,
