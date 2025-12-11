@@ -9,7 +9,7 @@ import datetime
 import json
 import random
 import tempfile
-from dataclasses import dataclass, fields
+from dataclasses import fields
 from pathlib import Path
 
 import imageio
@@ -204,7 +204,10 @@ def log_config_to_mlflow(config):
     for field in fields(config):
         if field.name not in IGNORE_KEYS:
             mlflow.log_param(field.name, getattr(config, field.name))
-    mlflow.log_param("frame_stack", config.env.frame_stack)
+
+    for field in fields(config.env):
+        if field.name not in ("env_id"):
+            mlflow.log_param(f"env/{field.name}", getattr(config.env, field.name))
 
     # Log the rest as descriptive tags
     mlflow.set_tag("seed_fixed", config.seed_fixed)
