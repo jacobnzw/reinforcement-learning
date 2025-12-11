@@ -23,6 +23,16 @@ from configs import EnvConfig
 device = torch.accelerator.current_accelerator()
 
 
+def make_mlp(input_dim, hidden_dims, output_dim):
+    """Stack layers for a feedforward network."""
+    stack_list = [nn.Linear(input_dim, hidden_dims[0]), nn.ReLU()]
+    for h in range(1, len(hidden_dims)):
+        stack_list.extend([nn.Linear(hidden_dims[h - 1], hidden_dims[h]), nn.ReLU()])
+    stack_list.extend([nn.Linear(hidden_dims[-1], hidden_dims[-1]), nn.ReLU()])
+    stack_list.append(nn.Linear(hidden_dims[-1], output_dim))
+    return nn.Sequential(*stack_list)
+
+
 @dataclass
 class UpdateResult:
     """Result of a policy update."""
@@ -61,15 +71,10 @@ class FlappyBirdStatePolicy(nn.Module):
         super(FlappyBirdStatePolicy, self).__init__()
 
         input_dim = self.state_dim * frame_stack
-        self.fc_stack = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, self.action_dim),
-        )
+        hidden_dims = hidden_dim if isinstance(hidden_dim, tuple) else tuple(hidden_dim)
+        self.fc_stack = make_mlp(input_dim, hidden_dims, self.action_dim)
         self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
+        self.hidden_dim = hidden_dims
 
     def forward(self, x):
         return self.fc_stack(x)
@@ -100,48 +105,14 @@ class FlappyBirdStateValue(nn.Module):
         super(FlappyBirdStateValue, self).__init__()
 
         input_dim = self.state_dim * frame_stack
-        self.fc_stack = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, self.value_dim),
-        )
+        hidden_dims = hidden_dim if isinstance(hidden_dim, tuple) else tuple(hidden_dim)
         self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
+        self.hidden_dim = hidden_dims
+
+        self.fc_stack = make_mlp(input_dim, hidden_dims, self.value_dim)
 
     def forward(self, x):
         return self.fc_stack(x)
-
-
-def make_env(
-    env_cfg: EnvConfig,
-    record_stats=False,
-    video_folder: str | None = None,
-    episode_trigger: Callable[[int], bool] | None = None,
-    **kwargs,
-):
-    """Make the environment."""
-    env = gym.make(
-        env_cfg.env_id,
-        render_mode="rgb_array",
-        max_episode_steps=env_cfg.max_episode_steps,
-        **kwargs,
-    )
-    if record_stats:
-        env = gym.wrappers.RecordEpisodeStatistics(env)
-    if video_folder:
-        if episode_trigger is None:
-            print("No episode trigger provided.")
-        env = gym.wrappers.RecordVideo(
-            env,
-            video_folder,
-            episode_trigger=episode_trigger,
-            disable_logger=True,
-        )
-    if env_cfg.frame_stack > 1:
-        env = gym.wrappers.FrameStack(env, num_stack=env_cfg.frame_stack)
-    return env
 
 
 class ReinforceAgent:
@@ -438,6 +409,39 @@ class VanillaPolicyGradientAgent:
             "policy/learning_rate": self.policy_scheduler.get_last_lr()[0],
             "policy/gradient_norm": grad_norm,
         }
+
+
+def make_env(
+    env_cfg: EnvConfig,
+    record_stats=False,
+    video_folder: str | None = None,
+    episode_trigger: Callable[[int], bool] | None = None,
+    **kwargs,
+):
+    """Make the environment."""
+    env = gym.make(
+        env_cfg.env_id,
+        render_mode="rgb_array",
+        max_episode_steps=env_cfg.max_episode_steps,
+        **kwargs,
+    )
+    if record_stats:
+        env = gym.wrappers.RecordEpisodeStatistics(env)
+    if video_folder:
+        if episode_trigger is None:
+            print("No episode trigger provided.")
+        env = gym.wrappers.RecordVideo(
+            env,
+            video_folder,
+            episode_trigger=episode_trigger,
+            disable_logger=True,
+        )
+    if env_cfg.norm_reward_gamma:  # apparently crucial for sparse rewards!
+        env = gym.wrappers.NormalizeReward(env, gamma=env_cfg.norm_reward_gamma)
+        env = gym.wrappers.NormalizeObservation(env)
+    if env_cfg.frame_stack > 1:
+        env = gym.wrappers.FrameStack(env, num_stack=env_cfg.frame_stack)
+    return env
 
 
 def prepare_policy_model(cfg, run_id=None):

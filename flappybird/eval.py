@@ -9,10 +9,11 @@ import numpy as np
 import torch
 import tyro
 
-from agents import ReinforceAgent, make_env
+from agents import VanillaPolicyGradientAgent, make_env
 from configs import EvalConfig
 from utils import boxplot_episode_rewards, log_config_to_mlflow, set_seeds
 
+# TODO: transitioning to wandb probably a good idea
 # MLflow setup
 mlflow.set_tracking_uri("http://localhost:5000")  # default mlflow server host:port
 mlflow.set_experiment(experiment_name="flappybird_reinforce_hparam_tuning")
@@ -25,7 +26,7 @@ def eval(
 ):
     """Evaluate the policy."""
     set_seeds(cfg.seed)
-    agent = ReinforceAgent(cfg, run_id, eval_mode=True)
+    agent = VanillaPolicyGradientAgent(cfg, run_id, eval_mode=True)
     print("Evaluating policy...")
 
     env = make_env(
@@ -54,8 +55,8 @@ def eval(
 
                     # Extract episode statistics from info (available after episode ends)
                     if "episode" in info:
-                        episode_reward = info["episode"]["r"][0]
-                        episode_length = info["episode"]["l"][0]
+                        episode_reward = info["episode"]["r"]
+                        episode_length = info["episode"]["l"]
                         episode_rewards.append(episode_reward)
                         print(
                             f"Episode {episode:> 3d} | Score: {info['score']:> 3d} | "
@@ -72,9 +73,15 @@ def eval(
                 print(
                     f"\nMean reward over {len(episode_rewards)} episodes: {mean_reward:.2f} +/- {std_reward:.2f}"
                 )
+                mlflow.log_metric("reward/mean", mean_reward)
+                mlflow.log_metric("reward/std", std_reward)
 
-                # TODO: log mean and std reward as metrics
-                # TODO: copy training parameters to the eval run for easy comparison
+                # Copy training parameters from parent run to eval run for easy comparison
+                parent_run = mlflow.get_run(run_id)
+                parent_params = parent_run.data.params
+                for param_name, param_value in parent_params.items():
+                    mlflow.log_param(f"train/{param_name}", param_value)
+
                 # Create and log boxplot of episode rewards
                 fig = boxplot_episode_rewards(episode_rewards)
                 mlflow.log_figure(fig, "episode_rewards_boxplot.png")

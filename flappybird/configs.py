@@ -1,7 +1,7 @@
 """Configuration dataclasses for FlappyBird training and evaluation."""
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 
 @dataclass
@@ -12,6 +12,7 @@ class EnvConfig:
     env_id: str = "FlappyBird-v0"
     max_episode_steps: int = 10_000
     frame_stack: int = 1  # number of frames to stack
+    norm_reward_gamma: float | None = None  # None for no reward normalization
 
 
 @dataclass
@@ -23,7 +24,7 @@ class TrainConfig:
 
     # Training settings
     n_episodes: int = 5_000
-    hidden_dim: int = 128
+    hidden_dim: Tuple[int] | int = (128, 128)
     gamma: float = 0.95
     entropy_coeff: float = 0.01
     learning_rate: float = 1e-2  # initial learning rate decays to target_learning_rate
@@ -33,7 +34,7 @@ class TrainConfig:
 
     # Value function settings
     vf_learning_rate: float = 1e-4  # value function learning rate
-    vf_hidden_dim: float = 128  # value function hidden dimension
+    vf_hidden_dim: Tuple[int] | int = (128, 128)  # value function hidden dimension
 
     # Reproducibility
     seed: int = 42
