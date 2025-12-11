@@ -9,24 +9,24 @@ import numpy as np
 import torch
 import tyro
 
-from agents import VanillaPolicyGradientAgent, make_env
+from agents import AgentType, make_env
 from configs import EvalConfig
 from utils import boxplot_episode_rewards, log_config_to_mlflow, set_seeds
 
 # TODO: transitioning to wandb probably a good idea
 # MLflow setup
 mlflow.set_tracking_uri("http://localhost:5000")  # default mlflow server host:port
-mlflow.set_experiment(experiment_name="flappybird_reinforce_hparam_tuning")
 
 
 def eval(
     cfg: EvalConfig,
+    model: AgentType = AgentType.VPG,
     run_id: str = "",
     no_record: bool = False,
 ):
     """Evaluate the policy."""
     set_seeds(cfg.seed)
-    agent = VanillaPolicyGradientAgent(cfg, run_id, eval_mode=True)
+    agent = model.agent_class(cfg, run_id, eval_mode=True)
     print("Evaluating policy...")
 
     env = make_env(
@@ -37,6 +37,7 @@ def eval(
         use_lidar=False,
     )
 
+    mlflow.set_experiment(experiment_name=f"{model.default_model_name}_hparam_tuning")
     with mlflow.start_run(run_id=run_id):
         with mlflow.start_run(nested=True):
             log_config_to_mlflow(cfg)

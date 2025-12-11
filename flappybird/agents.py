@@ -6,6 +6,7 @@ agents to play FlappyBird.
 
 from collections import deque
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Callable
 
 import flappy_bird_gymnasium  # noqa: F401
@@ -113,6 +114,34 @@ class FlappyBirdStateValue(nn.Module):
 
     def forward(self, x):
         return self.fc_stack(x)
+
+
+class AgentType(StrEnum):
+    """Available RL agents for training."""
+
+    VPG = "vpg"
+    REINFORCE = "reinforce"
+
+    @property
+    def agent_class(self):
+        """Get the corresponding agent class."""
+        return {
+            AgentType.VPG: VanillaPolicyGradientAgent,
+            AgentType.REINFORCE: ReinforceAgent,
+        }[self]
+
+    @property
+    def default_model_name(self) -> str:
+        """Get default model name for MLflow."""
+        return f"flappybird_{self.value}"
+
+    @property
+    def description(self) -> str:
+        """Get agent description."""
+        return {
+            AgentType.VPG: "Vanilla Policy Gradient with value function baseline",
+            AgentType.REINFORCE: "Basic REINFORCE policy gradient",
+        }[self]
 
 
 class ReinforceAgent:
