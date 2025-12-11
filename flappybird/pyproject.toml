@@ -27,3 +27,8 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100 # Increase from default 88
+
+[dependency-groups]
+dev = [
+    "ipython>=9.8.0",
+]
