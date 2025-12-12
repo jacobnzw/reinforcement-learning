@@ -11,11 +11,11 @@ from typing import Callable
 
 import flappy_bird_gymnasium  # noqa: F401
 import gymnasium as gym
-import mlflow
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import wandb
 from torch.distributions import Categorical
 from tqdm import tqdm
 
@@ -150,7 +150,7 @@ class ReinforceAgent:
             if run_id is None:
                 raise ValueError("Run ID must be specified in eval mode")
             self.cfg = cfg
-            self.policy_net = load_model_with_mlflow(run_id, device=device)
+            self.policy_net = load_model_with_wandb(run_id, device=device)
         else:
             self.cfg = cfg
             self.batching = cfg.batch_size is not None and cfg.batch_size > 1
@@ -277,10 +277,10 @@ class VanillaPolicyGradientAgent:
             if run_id is None:
                 raise ValueError("Run ID must be specified in eval mode")
             self.cfg = cfg
-            self.policy_net = load_model_with_mlflow(
+            self.policy_net = load_model_with_wandb(
                 run_id, model_name="flappybird_vpg_policy", device=device
             )
-            self.value_net = load_model_with_mlflow(
+            self.value_net = load_model_with_wandb(
                 run_id, model_name="flappybird_vpg_value", device=device
             )
         else:
@@ -476,7 +476,7 @@ def make_env(
 
 def prepare_policy_model(cfg, run_id=None):
     if run_id:
-        return load_model_with_mlflow(run_id, "flappybird_reinforce", device)
+        return load_model_with_wandb(run_id, "flappybird_reinforce", device)
     else:
         print("No run ID provided. Creating new model.")
         return FlappyBirdStatePolicy(hidden_dim=cfg.hidden_dim).to(device)
@@ -568,45 +568,49 @@ def collect_episode(agent, env, seed):
     return info
 
 
-def save_agent_with_mlflow(agent, model_name="flappybird_reinforce"):
-    save_model_with_mlflow(agent.policy_net, f"{model_name}_policy")
+def save_agent_with_wandb(agent, model_name="flappybird_reinforce"):
+    save_model_with_wandb(agent.policy_net, f"{model_name}_policy")
     if hasattr(agent, "value_net"):
-        save_model_with_mlflow(agent.value_net, f"{model_name}_value")
+        save_model_with_wandb(agent.value_net, f"{model_name}_value")
 
 
-def save_model_with_mlflow(model, model_name="flappybird_reinforce"):
-    """Saves model using MLflow.
+def save_model_with_wandb(model, model_name="flappybird_reinforce"):
+    """Saves model using wandb artifacts.
 
     Model move to CPU prior to saving for compatibility.
     """
-    # Log the model (Model Artifact)
-    model_info = mlflow.pytorch.log_model(
-        pytorch_model=model.cpu(),
-        input_example=np.random.rand(1, FlappyBirdStatePolicy.state_dim).astype(
-            np.float32
-        ),  # infers model signature automatically
-        name=model_name,
-        registered_model_name=model_name,
-    )
+    # Save model locally first
+    model_path = f"{model_name}.pth"
+    torch.save(model.cpu().state_dict(), model_path)
 
-    print(f"\nModel saved at URI: {model_info.model_uri}")
-    print(f"RUN ID: {model_info.run_id}")
+    # Create and log wandb artifact
+    model_artifact = wandb.Artifact(model_name, type="model")
+    model_artifact.add_file(model_path)
+    wandb.log_artifact(model_artifact)
+
+    print(f"\nModel saved as wandb artifact: {model_name}")
+    print(f"RUN ID: {wandb.run.id}")
 
 
-def load_model_with_mlflow(run_id, model_name="flappybird_reinforce", device=None):
-    """Load model from MLflow."""
+def load_model_with_wandb(run_id, model_name="flappybird_reinforce", device=None):
+    """Load model from wandb artifact."""
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Load model from MLflow
-    model_uri = f"runs:/{run_id}/{model_name}"
-    model = mlflow.pytorch.load_model(model_uri, map_location=device)
+    # Download artifact from wandb
+    api = wandb.Api()
+    artifact = api.artifact(f"{wandb.run.project}/{model_name}:latest")
+    artifact_dir = artifact.download()
 
-    print(f"Loaded model from MLflow URI: {model_uri}")
-    return model
+    # Load model state dict
+    model_path = f"{artifact_dir}/{model_name}.pth"
+    state_dict = torch.load(model_path, map_location=device)
+
+    print(f"Loaded model from wandb artifact: {model_name}")
+    return state_dict
 
 
-def log_results_to_mlflow(result: dict, info: dict, i_episode: int):
+def log_results_to_wandb(result: dict, info: dict, i_episode: int):
     if "episode" in info:
         result.update(
             {
@@ -616,4 +620,4 @@ def log_results_to_mlflow(result: dict, info: dict, i_episode: int):
             }
         )
 
-    mlflow.log_metrics(result, step=i_episode)
+    wandb.log(result, step=i_episode)
