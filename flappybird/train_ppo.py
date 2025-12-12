@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 import flappy_bird_gymnasium  # noqa: F401
 import gymnasium as gym  # noqa: F401
-import mlflow
 import tyro
+import wandb
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.env_util import make_vec_env
@@ -55,9 +55,7 @@ class PPOConfig:
     seed: int = 42
 
 
-# MLflow setup
-mlflow.set_tracking_uri("http://localhost:5000")
-mlflow.set_experiment(experiment_name="flappybird_ppo")
+# Wandb will be initialized in the train_ppo function
 
 
 def train_ppo(cfg: PPOConfig):
@@ -68,147 +66,145 @@ def train_ppo(cfg: PPOConfig):
     # Parse network architecture
     net_arch = [int(x) for x in cfg.net_arch.split(",")]
 
-    with mlflow.start_run() as run:
-        print("\nTraining FlappyBird with PPO...")
-        print(f"MLflow RUN ID: {run.info.run_id}\n")
+    # Initialize wandb
+    wandb.init(
+        project="flappybird_ppo",
+        name="ppo_train",
+        config={
+            "algorithm": "PPO",
+            "env_id": cfg.env_id,
+            "n_envs": cfg.n_envs,
+            "total_timesteps": cfg.total_timesteps,
+            "learning_rate": cfg.learning_rate,
+            "n_steps": cfg.n_steps,
+            "batch_size": cfg.batch_size,
+            "n_epochs": cfg.n_epochs,
+            "gamma": cfg.gamma,
+            "gae_lambda": cfg.gae_lambda,
+            "clip_range": cfg.clip_range,
+            "ent_coef": cfg.ent_coef,
+            "vf_coef": cfg.vf_coef,
+            "max_grad_norm": cfg.max_grad_norm,
+            "net_arch": str(net_arch),
+            "seed": cfg.seed,
+        },
+    )
 
-        # Log hyperparameters
-        mlflow.log_params(
-            {
-                "algorithm": "PPO",
-                "env_id": cfg.env_id,
-                "n_envs": cfg.n_envs,
-                "total_timesteps": cfg.total_timesteps,
-                "learning_rate": cfg.learning_rate,
-                "n_steps": cfg.n_steps,
-                "batch_size": cfg.batch_size,
-                "n_epochs": cfg.n_epochs,
-                "gamma": cfg.gamma,
-                "gae_lambda": cfg.gae_lambda,
-                "clip_range": cfg.clip_range,
-                "ent_coef": cfg.ent_coef,
-                "vf_coef": cfg.vf_coef,
-                "max_grad_norm": cfg.max_grad_norm,
-                "net_arch": str(net_arch),
-                "seed": cfg.seed,
-            }
-        )
+    print("\nTraining FlappyBird with PPO...")
+    print(f"Wandb RUN ID: {wandb.run.id}\n")
 
-        # Create vectorized training environment
-        train_env = make_vec_env(
-            cfg.env_id,
-            n_envs=cfg.n_envs,
-            seed=cfg.seed,
-            env_kwargs={"max_episode_steps": cfg.max_episode_steps},
-        )
-        train_env = VecNormalize(
-            train_env, norm_obs=True, norm_reward=True
-        )  # Key for sparse rewards
+    # Create vectorized training environment
+    train_env = make_vec_env(
+        cfg.env_id,
+        n_envs=cfg.n_envs,
+        seed=cfg.seed,
+        env_kwargs={"max_episode_steps": cfg.max_episode_steps},
+    )
+    train_env = VecNormalize(train_env, norm_obs=True, norm_reward=True)  # Key for sparse rewards
 
-        # Create evaluation environment
-        eval_env = make_vec_env(
-            cfg.env_id,
-            n_envs=1,
-            seed=cfg.seed + 1000,
-            env_kwargs={"max_episode_steps": cfg.max_episode_steps},
-        )
-        eval_env = VecNormalize(
-            eval_env, training=False, norm_obs=True, norm_reward=True
-        )  # Load train stats if needed
+    # Create evaluation environment
+    eval_env = make_vec_env(
+        cfg.env_id,
+        n_envs=1,
+        seed=cfg.seed + 1000,
+        env_kwargs={"max_episode_steps": cfg.max_episode_steps},
+    )
+    eval_env = VecNormalize(
+        eval_env, training=False, norm_obs=True, norm_reward=True
+    )  # Load train stats if needed
 
-        # Wrap for video recording
-        if cfg.video_freq > 0:
-            train_env = VecVideoRecorder(
-                train_env,
-                "videos/ppo_train",
-                record_video_trigger=lambda x: x % cfg.video_freq == 0,
-                video_length=1000,
-            )
-            eval_env = VecVideoRecorder(
-                eval_env,
-                video_folder="videos/ppo_eval",
-                record_video_trigger=lambda step: True,  # Record from step 0
-                video_length=2000,  # Max steps (covers even long episodes)
-            )
-
-        # Create PPO agent
-        model = PPO(
-            "MlpPolicy",
+    # Wrap for video recording
+    if cfg.video_freq > 0:
+        train_env = VecVideoRecorder(
             train_env,
-            learning_rate=cfg.learning_rate,
-            n_steps=cfg.n_steps,
-            batch_size=cfg.batch_size,
-            n_epochs=cfg.n_epochs,
-            gamma=cfg.gamma,
-            gae_lambda=cfg.gae_lambda,
-            clip_range=cfg.clip_range,
-            ent_coef=cfg.ent_coef,
-            vf_coef=cfg.vf_coef,
-            max_grad_norm=cfg.max_grad_norm,
-            policy_kwargs={"net_arch": net_arch},
-            verbose=1,
-            seed=cfg.seed,
-            tensorboard_log="./tensorboard_logs/",
+            "videos/ppo_train",
+            record_video_trigger=lambda x: x % cfg.video_freq == 0,
+            video_length=1000,
         )
-
-        # Set up callbacks
-        callbacks = []
-
-        # Evaluation callback
-        eval_callback = EvalCallback(
+        eval_env = VecVideoRecorder(
             eval_env,
-            best_model_save_path="./models/ppo_flappybird_best/",
-            log_path="./logs/",
-            eval_freq=cfg.eval_freq,
-            n_eval_episodes=cfg.n_eval_episodes,
-            deterministic=True,
-            render=False,
-        )
-        callbacks.append(eval_callback)
-
-        # Checkpoint callback
-        checkpoint_callback = CheckpointCallback(
-            save_freq=cfg.checkpoint_freq,
-            save_path="./models/ppo_flappybird_checkpoints/",
-            name_prefix="ppo_flappybird",
-        )
-        callbacks.append(checkpoint_callback)
-
-        # Train the agent
-        model.learn(
-            total_timesteps=cfg.total_timesteps,
-            callback=callbacks,
-            progress_bar=True,
+            video_folder="videos/ppo_eval",
+            record_video_trigger=lambda step: True,  # Record from step 0
+            video_length=2000,  # Max steps (covers even long episodes)
         )
 
-        # Save final model
-        model.save("./models/ppo_flappybird_final")
+    # Create PPO agent
+    model = PPO(
+        "MlpPolicy",
+        train_env,
+        learning_rate=cfg.learning_rate,
+        n_steps=cfg.n_steps,
+        batch_size=cfg.batch_size,
+        n_epochs=cfg.n_epochs,
+        gamma=cfg.gamma,
+        gae_lambda=cfg.gae_lambda,
+        clip_range=cfg.clip_range,
+        ent_coef=cfg.ent_coef,
+        vf_coef=cfg.vf_coef,
+        max_grad_norm=cfg.max_grad_norm,
+        policy_kwargs={"net_arch": net_arch},
+        verbose=1,
+        seed=cfg.seed,
+        tensorboard_log="./tensorboard_logs/",
+    )
 
-        # Log model to MLflow
-        mlflow.pytorch.log_model(
-            model.policy,
-            "ppo_policy",
-            registered_model_name="flappybird_ppo",
-        )
+    # Set up callbacks
+    callbacks = []
 
-        # Final evaluation
-        print("\nFinal evaluation...")
-        mean_reward, std_reward = sb3_evaluate(model, eval_env, n_eval_episodes=20)
-        print(f"Mean reward: {mean_reward:.2f} +/- {std_reward:.2f}")
+    # Evaluation callback
+    eval_callback = EvalCallback(
+        eval_env,
+        best_model_save_path="./models/ppo_flappybird_best/",
+        log_path="./logs/",
+        eval_freq=cfg.eval_freq,
+        n_eval_episodes=cfg.n_eval_episodes,
+        deterministic=True,
+        render=False,
+    )
+    callbacks.append(eval_callback)
 
-        # Log final metrics
-        mlflow.log_metrics(
-            {
-                "final_mean_reward": mean_reward,
-                "final_std_reward": std_reward,
-            }
-        )
+    # Checkpoint callback
+    checkpoint_callback = CheckpointCallback(
+        save_freq=cfg.checkpoint_freq,
+        save_path="./models/ppo_flappybird_checkpoints/",
+        name_prefix="ppo_flappybird",
+    )
+    callbacks.append(checkpoint_callback)
 
-        train_env.close()
-        eval_env.close()
+    # Train the agent
+    model.learn(
+        total_timesteps=cfg.total_timesteps,
+        callback=callbacks,
+        progress_bar=True,
+    )
 
-        print("\nTraining completed! Model saved and logged to MLflow.")
-        print(f"Run ID: {run.info.run_id}")
+    # Save final model
+    model.save("./models/ppo_flappybird_final")
+
+    # Save model as wandb artifact
+    model_artifact = wandb.Artifact("ppo_policy", type="model")
+    model_artifact.add_file("./models/ppo_flappybird_final.zip")
+    wandb.log_artifact(model_artifact)
+
+    # Final evaluation
+    print("\nFinal evaluation...")
+    mean_reward, std_reward = sb3_evaluate(model, eval_env, n_eval_episodes=20)
+    print(f"Mean reward: {mean_reward:.2f} +/- {std_reward:.2f}")
+
+    # Log final metrics
+    wandb.log(
+        {
+            "final_mean_reward": mean_reward,
+            "final_std_reward": std_reward,
+        }
+    )
+
+    train_env.close()
+    eval_env.close()
+
+    print("\nTraining completed! Model saved and logged to wandb.")
+    print(f"Run ID: {wandb.run.id}")
+    wandb.finish()
 
 
 if __name__ == "__main__":
