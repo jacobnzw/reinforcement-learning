@@ -13,6 +13,7 @@ class EnvConfig:
     max_episode_steps: int = 1_000
     frame_stack: int = 1  # number of frames to stack
     norm_reward_gamma: float | None = 0.95  # None for no reward normalization
+    norm_observations: bool = True  # normalize observations
 
 
 @dataclass

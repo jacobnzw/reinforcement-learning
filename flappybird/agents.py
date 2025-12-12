@@ -467,6 +467,7 @@ def make_env(
         )
     if env_cfg.norm_reward_gamma:  # apparently crucial for sparse rewards!
         env = gym.wrappers.NormalizeReward(env, gamma=env_cfg.norm_reward_gamma)
+    if env_cfg.norm_observations:
         env = gym.wrappers.NormalizeObservation(env)
     if env_cfg.frame_stack > 1:
         env = gym.wrappers.FrameStack(env, num_stack=env_cfg.frame_stack)
