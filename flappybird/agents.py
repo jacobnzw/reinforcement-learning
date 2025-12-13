@@ -15,10 +15,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import wandb
 from torch.distributions import Categorical
 from tqdm import tqdm
 
+import wandb
 from configs import EnvConfig
 
 device = torch.accelerator.current_accelerator()
@@ -145,18 +145,20 @@ class AgentType(StrEnum):
 
 
 class ReinforceAgent:
-    def __init__(self, cfg, run_id=None, eval_mode=False):
+    def __init__(self, cfg, train_run=None, eval_mode=False):
         if eval_mode:
-            if run_id is None:
-                raise ValueError("Run ID must be specified in eval mode")
+            if train_run is None:
+                raise ValueError("Train run must be specified in eval mode")
             self.cfg = cfg
-            self.policy_net = load_model_with_wandb(run_id, device=device)
+            self.policy_net = load_model_with_wandb(
+                train_run, model_name="flappybird_reinforce_policy", device=device
+            )
         else:
             self.cfg = cfg
             self.batching = cfg.batch_size is not None and cfg.batch_size > 1
             self.grad_clipping = cfg.max_grad_norm is not None and cfg.max_grad_norm > 0.0
 
-            self.policy_net = prepare_policy_model(cfg, run_id)
+            self.policy_net = prepare_policy_model(cfg, train_run)
             self.optimizer = optim.AdamW(self.policy_net.parameters(), lr=cfg.learning_rate)
             # Set up LR scheduler to decay from initial to target learning rate by the end of training
             n_scheduler_steps = (
@@ -272,16 +274,16 @@ class VanillaPolicyGradientAgent:
     REINFORCE with learned value function baseline.
     """
 
-    def __init__(self, cfg, run_id=None, eval_mode=False):
+    def __init__(self, cfg, train_run=None, eval_mode=False):
         if eval_mode:
-            if run_id is None:
-                raise ValueError("Run ID must be specified in eval mode")
+            if train_run is None:
+                raise ValueError("Train run must be specified in eval mode")
             self.cfg = cfg
             self.policy_net = load_model_with_wandb(
-                run_id, model_name="flappybird_vpg_policy", device=device
+                train_run, model_name="flappybird_vpg_policy", device=device
             )
             self.value_net = load_model_with_wandb(
-                run_id, model_name="flappybird_vpg_value", device=device
+                train_run, model_name="flappybird_vpg_value", device=device
             )
         else:
             self.cfg = cfg
@@ -474,11 +476,11 @@ def make_env(
     return env
 
 
-def prepare_policy_model(cfg, run_id=None):
-    if run_id:
-        return load_model_with_wandb(run_id, "flappybird_reinforce", device)
+def prepare_policy_model(cfg, train_run=None):
+    if train_run:
+        return load_model_with_wandb(train_run, "flappybird_reinforce_policy", device)
     else:
-        print("No run ID provided. Creating new model.")
+        print("No train run provided. Creating new model.")
         return FlappyBirdStatePolicy(hidden_dim=cfg.hidden_dim).to(device)
 
 
@@ -568,56 +570,86 @@ def collect_episode(agent, env, seed):
     return info
 
 
-def save_agent_with_wandb(agent, model_name="flappybird_reinforce"):
-    save_model_with_wandb(agent.policy_net, f"{model_name}_policy")
-    if hasattr(agent, "value_net"):
-        save_model_with_wandb(agent.value_net, f"{model_name}_value")
+def save_agent_with_wandb(run: wandb.Run, agent, model_name="flappybird_vpg"):
+    def save_model(model, model_name_suffix: str):
+        model_path = f"{model_name}_{model_name_suffix}.pth"
+        torch.save(model.cpu().state_dict(), model_path)
+        run.save(model_path)
 
-
-def save_model_with_wandb(model, model_name="flappybird_reinforce"):
-    """Saves model using wandb artifacts.
-
-    Model move to CPU prior to saving for compatibility.
-    """
     # Save model locally first
-    model_path = f"{model_name}.pth"
-    torch.save(model.cpu().state_dict(), model_path)
+    save_model(agent.policy_net, "policy")
+    if hasattr(agent, "value_net"):
+        save_model(agent.value_net, "value")
 
     # Create and log wandb artifact
-    model_artifact = wandb.Artifact(model_name, type="model")
-    model_artifact.add_file(model_path)
-    wandb.log_artifact(model_artifact)
+    # model_artifact = wandb.Artifact(model_name, type="model")
+    # model_artifact.add_file(policy_net_path)
+    # model_artifact.add_file(value_net_path)
+    # run.log_artifact(model_artifact, type="model")
 
     print(f"\nModel saved as wandb artifact: {model_name}")
-    print(f"RUN ID: {wandb.run.id}")
+    print(f"RUN ID: {run.id}")
+    print(f"Full run path for loading: {run.entity}/{run.project}/{run.id}")
 
 
-def load_model_with_wandb(run_id, model_name="flappybird_reinforce", device=None):
-    """Load model from wandb artifact."""
+def load_model_with_wandb(
+    train_run: wandb.Run, model_name="flappybird_reinforce_policy", device=None
+):
+    """Load model from wandb using wandb.restore().
+
+    Args:
+        train_run (wandb.Run or wandb.Api.Run): W&B run object from which to load the model.
+            Can be obtained via wandb.Api().run("entity/project/run_id")
+        model_name (str): Name of the model file to load (e.g., "flappybird_vpg_policy",
+            "flappybird_vpg_value", "flappybird_reinforce_policy")
+        device: PyTorch device to load the model on
+
+    Returns:
+        torch.nn.Module: The loaded model with weights
+    """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Download artifact from wandb
-    api = wandb.Api()
-    artifact = api.artifact(f"{wandb.run.project}/{model_name}:latest")
-    artifact_dir = artifact.download()
+    # Fixed entity for this project
+    ENTITY = "jacobnzw-n-a"
 
-    # Load model state dict
-    model_path = f"{artifact_dir}/{model_name}.pth"
-    state_dict = torch.load(model_path, map_location=device)
+    # Extract run_id and project from the run object
+    run_id = train_run.id
+    project = train_run.project
 
-    print(f"Loaded model from wandb artifact: {model_name}")
-    return state_dict
+    # Construct the run path for wandb.restore()
+    run_path = f"{ENTITY}/{project}/{run_id}"
 
-
-def log_results_to_wandb(result: dict, info: dict, i_episode: int):
-    if "episode" in info:
-        result.update(
-            {
-                "episode/reward": info["episode"]["r"],
-                "episode/length": info["episode"]["l"],
-                "episode/duration": info["episode"]["t"],
-            }
+    # Restore the model file using wandb.restore()
+    model_filename = f"{model_name}.pth"
+    try:
+        restored_file = wandb.restore(model_filename, run_path=run_path)
+        model_path = restored_file.name
+    except Exception as e:
+        raise ValueError(
+            f"Could not restore model file '{model_filename}' from run {run_path}. Error: {e}"
         )
 
-    wandb.log(result, step=i_episode)
+    # Load model state dict
+    state_dict = torch.load(model_path, map_location=device)
+
+    # Get config from the run to create model with correct architecture
+    config = train_run.config
+
+    # Create the appropriate model based on the model name and load the state dict
+    if "policy" in model_name:
+        hidden_dim = config.get("hidden_dim", (128, 128))
+        model = FlappyBirdStatePolicy(hidden_dim=hidden_dim).to(device)
+        model.load_state_dict(state_dict)
+    elif "value" in model_name:
+        vf_hidden_dim = config.get("vf_hidden_dim", (128, 128))
+        model = FlappyBirdStateValue(hidden_dim=vf_hidden_dim).to(device)
+        model.load_state_dict(state_dict)
+    else:
+        # Default case for backward compatibility - assume it's a policy model
+        hidden_dim = config.get("hidden_dim", (128, 128))
+        model = FlappyBirdStatePolicy(hidden_dim=hidden_dim).to(device)
+        model.load_state_dict(state_dict)
+
+    print(f"Loaded model '{model_name}' from wandb run: {run_path}")
+    return model
