@@ -195,6 +195,7 @@ def push_to_hub(repo_id, env_id, model, hyperparameters, eval_env, video_fps=30)
 
 
 # MLflow utilities
+# TODO: likely not needed w/ wandb
 def log_config_to_wandb(config):
     """Log config to wandb."""
 
