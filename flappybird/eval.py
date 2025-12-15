@@ -51,6 +51,7 @@ def eval(
         episode_trigger=lambda e: True,
         use_lidar=False,
     )
+    env.set_wrapper_attr("update_running_mean", False)
 
     # Initialize wandb for evaluation
     with wandb.init(
