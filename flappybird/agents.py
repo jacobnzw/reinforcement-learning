@@ -19,7 +19,7 @@ from torch.distributions import Categorical
 from tqdm import tqdm
 
 import wandb
-from configs import EnvConfig
+from configs import EnvConfig, EvalConfig, TrainConfig
 
 device = torch.accelerator.current_accelerator()
 
@@ -145,16 +145,19 @@ class AgentType(StrEnum):
 
 
 class ReinforceAgent:
-    def __init__(self, cfg, train_run=None, eval_mode=False):
+    def __init__(
+        self, cfg: TrainConfig | EvalConfig, cfg_env: EnvConfig, train_run=None, eval_mode=False
+    ):
+        self.type = AgentType.REINFORCE
+        self.cfg = cfg
+        self.cfg_env = cfg_env
         if eval_mode:
             if train_run is None:
                 raise ValueError("Train run must be specified in eval mode")
-            self.cfg = cfg
             self.policy_net = load_model_with_wandb(
                 train_run, model_name="flappybird_reinforce_policy", device=device
             )
         else:
-            self.cfg = cfg
             self.batching = cfg.batch_size is not None and cfg.batch_size > 1
             self.grad_clipping = cfg.max_grad_norm is not None and cfg.max_grad_norm > 0.0
 
@@ -183,7 +186,7 @@ class ReinforceAgent:
         """Select an action given the state."""
 
         # when frame stacking, state[0] stores game states as a LazyFrame instance
-        if self.cfg.env.frame_stack > 1:
+        if self.cfg_env.frame_stack > 1:
             state = state[0][:].reshape(-1)
 
         state = torch.from_numpy(state).float().unsqueeze(0).to(device)
@@ -274,11 +277,15 @@ class VanillaPolicyGradientAgent:
     REINFORCE with learned value function baseline.
     """
 
-    def __init__(self, cfg, train_run=None, eval_mode=False):
+    def __init__(
+        self, cfg: TrainConfig | EvalConfig, cfg_env: EnvConfig, train_run=None, eval_mode=False
+    ):
+        self.type = AgentType.VPG
+        self.cfg = cfg
+        self.cfg_env = cfg_env
         if eval_mode:
             if train_run is None:
                 raise ValueError("Train run must be specified in eval mode")
-            self.cfg = cfg
             self.policy_net = load_model_with_wandb(
                 train_run, model_name="flappybird_vpg_policy", device=device
             )
@@ -286,7 +293,6 @@ class VanillaPolicyGradientAgent:
                 train_run, model_name="flappybird_vpg_value", device=device
             )
         else:
-            self.cfg = cfg
             self.batching = cfg.batch_size is not None and cfg.batch_size > 1
             self.grad_clipping = cfg.max_grad_norm is not None and cfg.max_grad_norm > 0.0
 
@@ -327,7 +333,7 @@ class VanillaPolicyGradientAgent:
         """Select an action given the state."""
 
         # when frame stacking, state[0] stores game states as a LazyFrame instance
-        if self.cfg.env.frame_stack > 1:
+        if self.cfg_env.frame_stack > 1:
             state = state[0][:].reshape(-1)
 
         state = torch.from_numpy(state).float().unsqueeze(0).to(device)
@@ -408,12 +414,12 @@ class VanillaPolicyGradientAgent:
     def print_update_status(self, result: dict, i_episode: int):
         if not self.is_header_printed:
             tqdm.write(
-                f"{'Episode':>8s} | {'Reward':>8s} | {'Loss (P)':>8s} | {'Loss (V)':>8s} | "
+                f"{'Episode':>8s} | {'Samples':>8s} | {'Reward':>8s} | {'Loss (P)':>8s} | {'Loss (V)':>8s} | "
                 f"{'Entropy':>9s} | {'LR':>8s}"
             )
             self.is_header_printed = True
         tqdm.write(
-            f"{i_episode + 1:> 8d} | {self.summed_reward:> 8.1f} | "
+            f"{i_episode + 1:> 8d} | {result['count_samples']:> 8d} | {self.summed_reward:> 8.1f} | "
             f"{result['policy/loss']:> 8.2f} | {result['value/loss']:> 8.2f} | "
             f"{result['policy/entropy']:> .2e} | {result['policy/learning_rate']:> .2e}"
         )
