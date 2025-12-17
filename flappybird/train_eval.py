@@ -44,9 +44,9 @@ class AgentEvaluator:
 
         tqdm.write(
             f"\nEvaluation: [mean +/- std (min <-> max)]\n"
-            f"{_stat_line('Reward', reward_stats)}"
-            f"{_stat_line('Length', length_stats)}"
-            f"{_stat_line('Score', score_stats)}"
+            f"{_stat_line('Reward', reward_stats)}\n"
+            f"{_stat_line('Length', length_stats)}\n"
+            f"{_stat_line('Score', score_stats)}\n"
             f"{'Best':8s}: {self.best_mean_reward:6.2f}\n"
         )
         payload = {
@@ -70,7 +70,7 @@ class AgentEvaluator:
             )
         self.run.log(payload)
 
-    def __call__(self, agent, env: gym.Env, i_episode: int):
+    def __call__(self, agent, env: gym.Env):
         with torch.no_grad():
             episode_rewards = []
             episode_lengths = []
@@ -103,7 +103,8 @@ class AgentEvaluator:
             if reward_stats["mean"] > self.best_mean_reward:
                 print(f"New best mean reward: {reward_stats['mean']:.2f}")
                 self.best_mean_reward = reward_stats["mean"]
-                save_agent_with_wandb(self.run, agent, model_name=f"{agent.type}_{i_episode}_best")
+                # Model file will be overwritten locally and in W&B
+                save_agent_with_wandb(self.run, agent, model_name=f"{agent.type}_best")
 
             return reward_stats["mean"]
 
@@ -130,7 +131,6 @@ def train(
         else None,
         use_lidar=False,
     )
-    # TODO: need new config structure
     eval_env = make_env(
         cfg.env,
         record_stats=True,
@@ -183,8 +183,8 @@ def train(
                 run.log(result, step=i_episode, commit=True)
 
             if (i_episode + 1) % cfg.eval.eval_every == 0:
-                # prints eval stats
-                evaluator(agent, eval_env, i_episode)
+                # prints eval stats and logs to wandb
+                evaluator(agent, eval_env)
 
         # Log summary metrics
         return_queue = env.get_wrapper_attr("return_queue")

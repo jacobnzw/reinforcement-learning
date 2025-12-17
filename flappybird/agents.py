@@ -579,7 +579,7 @@ def collect_episode(agent, env, seed):
 def save_agent_with_wandb(run: wandb.Run, agent, model_name="flappybird_vpg"):
     def save_model(model, model_name_suffix: str):
         model_path = f"{model_name}_{model_name_suffix}.pth"
-        torch.save(model.cpu().state_dict(), model_path)
+        torch.save(model.state_dict(), model_path)
         run.save(model_path)
 
     # Save model locally first
