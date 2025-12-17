@@ -22,19 +22,7 @@ In all cases, a simple feedforward network with 2 hidden layers of 128 units eac
 ## Environment
 The environment used for training is [Flappy Bird Gymnasium](https://github.com/markub3327/flappy-bird-gymnasium/tree/main). It's a simple yet effective environment for testing RL algorithms.
 
-I used **12-dimensional environment states** (via `use_lidar=False`) consisting of the following:
- - the last pipe's horizontal position
- - the last top pipe's vertical position
- - the last bottom pipe's vertical position
- - the next pipe's horizontal position
- - the next top pipe's vertical position
- - the next bottom pipe's vertical position
- - the next next pipe's horizontal position
- - the next next top pipe's vertical position
- - the next next bottom pipe's vertical position
- - bird's vertical position
- - bird's vertical velocity
- - bird's rotation
+I used **12-dimensional environment states** (via `use_lidar=False`) consisting of bird's position, velocity, and rotation, as well as the positions of the 3 pipes in front of the bird.
 
 The **action** space is discrete, with 2 actions:
  - `0`: flap
@@ -46,14 +34,29 @@ The **reward** structure is sparse:
  - `+0.1` for each frame alive (to encourage longer lives)
  - `-0.5` for reaching top of screen (to penalize flying too high)
 
-## Results
+
+## Experiments
 REINFORCE is fucking hopeless for sparse rewards. Adding a value function baseline in VPG doesn't help much at all. PPO works with increased exploration via entropy coefficient.
+
+### VPG: Sparse vs Dense Rewards
+VPG works on InvertedPendulum with dense rewards, but fails on FlappyBird-v0 with sparse rewards.
+
+### VPG: Normalized vs Un-Normalized Sparse Rewards
+Compare normalized vs un-normalized rewards on FlappyBird-v0.
+
+### Sample Efficiency: PPO vs VPG
+PPO is way more sample efficient than VPG.
+
+| Algo | Reward / 1K Samples | 
+|------|---------------------|
+| PPO  | Fill                |
+| VPG  | Fill                |
+
 
 ## Possible Improvements
 RL is CPU-bound due to the environment interactions. Therefore, the following improvements are possible:
 - Use vectorized environments for training
-- Use frame-stacking
-- Use a more sophisticated reward shaping
+- Use [Generalized Advantage Estimation (GAE)](https://shivang-ahd.medium.com/generalized-advantage-estimation-a-deep-dive-into-bias-variance-and-policy-gradients-a5e0b3454dad)
 
 ## Misc
 The RL theory takes some time setting up. [Gonkee's The FASTEST Introduction to Reinforcement Learning](https://youtu.be/VnpRp7ZglfA?si=02KyDUDj2Gi4Qeds) is a great introductory bird's eye view perspective on the whole field, which my [quick notes](RL_NOTES.md) are based on.
