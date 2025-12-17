@@ -19,7 +19,7 @@ from torch.distributions import Categorical
 from tqdm import tqdm
 
 import wandb
-from configs import EnvConfig, EvalConfig, TrainConfig
+from configs import EnvConfig, EvalConfig, TrainConfig, TrainEvalConfig
 
 device = torch.accelerator.current_accelerator()
 
@@ -278,7 +278,12 @@ class VanillaPolicyGradientAgent:
     """
 
     def __init__(
-        self, cfg: TrainConfig | EvalConfig, cfg_env: EnvConfig, train_run=None, eval_mode=False
+        self,
+        cfg: TrainConfig | EvalConfig,
+        cfg_env: EnvConfig,
+        train_run=None,
+        model_basename: str | None = None,
+        eval_mode=False,
     ):
         self.type = AgentType.VPG
         self.cfg = cfg
@@ -287,10 +292,10 @@ class VanillaPolicyGradientAgent:
             if train_run is None:
                 raise ValueError("Train run must be specified in eval mode")
             self.policy_net = load_model_with_wandb(
-                train_run, model_name="flappybird_vpg_policy", device=device
+                train_run, model_name=f"{model_basename}_policy", device=device
             )
             self.value_net = load_model_with_wandb(
-                train_run, model_name="flappybird_vpg_value", device=device
+                train_run, model_name=f"{model_basename}_value", device=device
             )
         else:
             self.batching = cfg.batch_size is not None and cfg.batch_size > 1
@@ -643,17 +648,24 @@ def load_model_with_wandb(
     config = train_run.config
 
     # Create the appropriate model based on the model name and load the state dict
+    def get_train_cfg_key(key: str, config: dict):
+        if key in config:
+            return config[key]
+        if "train" in config and key in config["train"]:
+            return config["train"][key]
+        return None
+
     if "policy" in model_name:
-        hidden_dim = config.get("hidden_dim", (128, 128))
+        hidden_dim = get_train_cfg_key("hidden_dim", config)
         model = FlappyBirdStatePolicy(hidden_dim=hidden_dim).to(device)
         model.load_state_dict(state_dict)
     elif "value" in model_name:
-        vf_hidden_dim = config.get("vf_hidden_dim", (128, 128))
+        vf_hidden_dim = get_train_cfg_key("vf_hidden_dim", config)
         model = FlappyBirdStateValue(hidden_dim=vf_hidden_dim).to(device)
         model.load_state_dict(state_dict)
     else:
         # Default case for backward compatibility - assume it's a policy model
-        hidden_dim = config.get("hidden_dim", (128, 128))
+        hidden_dim = get_train_cfg_key("hidden_dim", config)
         model = FlappyBirdStatePolicy(hidden_dim=hidden_dim).to(device)
         model.load_state_dict(state_dict)
 
