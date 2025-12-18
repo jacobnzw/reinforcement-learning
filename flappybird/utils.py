@@ -17,9 +17,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import torch
-import wandb
 from huggingface_hub import HfApi, login
 from huggingface_hub.repocard import metadata_eval_result, metadata_save
+
+import wandb
 
 
 # Hugging Face Hub utilities
@@ -194,7 +195,35 @@ def push_to_hub(repo_id, env_id, model, hyperparameters, eval_env, video_fps=30)
         print(f"Your model is pushed to the Hub. You can view your model here: {repo_url}")
 
 
-# MLflow utilities
+# Logging utils
+def create_run_folder_structure(run: wandb.Run) -> dict[str, str]:
+    """Create folder structure for run data.
+
+    Args:
+        run: W&B run object
+
+    Returns:
+        Dictionary with paths to created folders
+    """
+    from datetime import datetime
+    from pathlib import Path
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = Path(f"run_data/run-{timestamp}-{run.id}")
+
+    folders = {
+        "root": run_dir,
+        "videos_train": run_dir / "videos" / "train",
+        "videos_eval": run_dir / "videos" / "eval",
+        "models": run_dir / "models",
+    }
+
+    for folder in folders.values():
+        folder.mkdir(parents=True, exist_ok=True)
+
+    return {k: str(v) for k, v in folders.items()}
+
+
 # TODO: likely not needed w/ wandb
 def log_config_to_wandb(config):
     """Log config to wandb."""

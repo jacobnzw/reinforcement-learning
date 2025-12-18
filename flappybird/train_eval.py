@@ -5,6 +5,7 @@ for training REINFORCE agents on FlappyBird.
 """
 
 from dataclasses import asdict
+from pathlib import Path
 
 import gymnasium as gym
 import numpy as np
@@ -16,13 +17,14 @@ from tqdm import tqdm
 import wandb
 from agents import AgentType, collect_episode, make_env, save_agent_with_wandb
 from configs import EvalConfig, TrainEvalConfig
-from utils import set_seeds
+from utils import create_run_folder_structure, set_seeds
 
 
 class AgentEvaluator:
-    def __init__(self, cfg: EvalConfig, run: wandb.Run):
+    def __init__(self, cfg: EvalConfig, run: wandb.Run, video_root: str):
         self.cfg = cfg
         self.run = run
+        self.video_root = Path(video_root)
         self.best_mean_reward = -np.inf
         self.best_mean_score = -np.inf
 
@@ -70,7 +72,19 @@ class AgentEvaluator:
             )
         self.run.log(payload)
 
-    def __call__(self, agent, env: gym.Env):
+    def __call__(self, agent, env: gym.Env, train_episode: int):
+        """Evaluate the agent.
+
+        Args:
+            agent: Agent to evaluate
+            env: Environment to evaluate in
+            train_episode: Current training episode number
+        """
+        # Create a new eval video folder for each evaluation
+        eval_video_folder = self.video_root / str(train_episode)
+        eval_video_folder.mkdir(parents=True, exist_ok=True)
+        env.set_wrapper_attr("video_folder", eval_video_folder.as_posix())
+
         with torch.no_grad():
             episode_rewards = []
             episode_lengths = []
@@ -122,22 +136,6 @@ def train(
 
     batching = cfg.train.batch_size is not None and cfg.train.batch_size > 1
 
-    env = make_env(
-        cfg.env,
-        record_stats=True,
-        video_folder="videos/train",
-        episode_trigger=lambda e: e % cfg.train.record_every == 0
-        if cfg.train.record_every
-        else None,
-        use_lidar=False,
-    )
-    eval_env = make_env(
-        cfg.env,
-        record_stats=True,
-        video_folder="videos/eval",
-        use_lidar=False,
-    )
-
     # Set seeds for reproducibility
     set_seeds(cfg.train.seed)
 
@@ -154,10 +152,27 @@ def train(
         print(f"\nTraining Flappy with {model.value.upper()}...\n")
         # TODO: convert dataclass to rich/richer table (dict); more readable in wandb logs
         pprint(cfg_dict)
-        print(f"Wandb RUN ID: {run.id}")
-        print(f"Full run path for loading: {run.entity}/{run.project}/{run.id}\n")
+        print(f"W&B RUN ID: {run.id}")
+        print(f"Full W&B run path for loading: {run.entity}/{run.project}/{run.id}\n")
+        work_dirs = create_run_folder_structure(run)
 
-        evaluator = AgentEvaluator(cfg.eval, run)
+        env = make_env(
+            cfg.env,
+            record_stats=True,
+            video_folder=work_dirs["videos_train"],
+            episode_trigger=lambda e: e % cfg.train.record_every == 0
+            if cfg.train.record_every
+            else None,
+            use_lidar=False,
+        )
+        eval_env = make_env(
+            cfg.env,
+            record_stats=True,
+            video_folder=work_dirs["videos_eval"],
+            use_lidar=False,
+        )
+
+        evaluator = AgentEvaluator(cfg.eval, run, work_dirs["videos_eval"])
         count_samples = 0
         for i_episode in tqdm(range(cfg.train.n_episodes), desc="Training", unit="ep"):
             # Collect experience over one episode
@@ -184,12 +199,13 @@ def train(
 
             if (i_episode + 1) % cfg.eval.eval_every == 0:
                 # prints eval stats and logs to wandb
-                evaluator(agent, eval_env)
+                evaluator(agent, eval_env, i_episode)
 
         # Log summary metrics
         return_queue = env.get_wrapper_attr("return_queue")
         run.log({f"max_reward_last_{return_queue.maxlen}_episodes": max(return_queue)})
-        save_agent_with_wandb(run, agent, model_name=f"{model.default_model_name}_last")
+        # TODO: default model name should not contain hardcoded env.spec.id
+        save_agent_with_wandb(run, agent, model_name=f"{model.default_model_name}_final")
 
         env.close()
         eval_env.close()
