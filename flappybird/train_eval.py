@@ -144,12 +144,12 @@ def train(
     cfg_dict = asdict(cfg)
     cfg_dict.update({"optimizer": agent.policy_optimizer.__class__.__name__})
     with wandb.init(
-        project=f"{model.default_model_name}",
+        project=f"{cfg.env.id.lower()}-{model.value}",  # f"{model.default_model_name}",
         name=f"train_{model.value}",
         job_type="train_eval",
         config=cfg_dict,
     ) as run:
-        print(f"\nTraining Flappy with {model.value.upper()}...\n")
+        print(f"\nTraining {cfg.env.id} with {model.value.upper()}...\n")
         # TODO: convert dataclass to rich/richer table (dict); more readable in wandb logs
         pprint(cfg_dict)
         print(f"W&B RUN ID: {run.id}")
@@ -204,8 +204,7 @@ def train(
         # Log summary metrics
         return_queue = env.get_wrapper_attr("return_queue")
         run.log({f"max_reward_last_{return_queue.maxlen}_episodes": max(return_queue)})
-        # TODO: default model name should not contain hardcoded env.spec.id
-        save_agent_with_wandb(run, agent, model_name=f"{model.default_model_name}_final")
+        save_agent_with_wandb(run, agent, model_name=f"{cfg.env.id.lower()}-{model.value}_final")
 
         env.close()
         eval_env.close()

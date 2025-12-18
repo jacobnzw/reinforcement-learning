@@ -131,11 +131,6 @@ class AgentType(StrEnum):
         }[self]
 
     @property
-    def default_model_name(self) -> str:
-        """Get default model name for MLflow."""
-        return f"flappybird_{self.value}"
-
-    @property
     def description(self) -> str:
         """Get agent description."""
         return {

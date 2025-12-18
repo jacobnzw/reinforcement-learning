@@ -9,7 +9,7 @@ class EnvConfig:
     """Environment configuration for FlappyBird."""
 
     # Environment settings
-    env_id: str = "FlappyBird-v0"
+    id: str = "FlappyBird-v0"
     max_episode_steps: int = 1_000
     frame_stack: int = 1  # number of frames to stack
     norm_reward_gamma: float | None = 0.95  # None for no reward normalization
