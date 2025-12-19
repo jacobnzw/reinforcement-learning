@@ -453,14 +453,13 @@ def make_env(
     record_stats=False,
     video_folder: str | None = None,
     episode_trigger: Callable[[int], bool] | None = None,
-    **kwargs,
 ):
     """Make the environment."""
     env = gym.make(
         env_cfg.id,
         render_mode="rgb_array",
         max_episode_steps=env_cfg.max_episode_steps,
-        **kwargs,
+        use_lidar=False,
     )
     if record_stats:
         env = gym.wrappers.RecordEpisodeStatistics(env)

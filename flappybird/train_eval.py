@@ -165,14 +165,12 @@ def train(
             episode_trigger=lambda e: e % cfg.train.record_every == 0
             if cfg.train.record_every
             else None,
-            use_lidar=False,
         )
         eval_env = make_env(
             cfg.env,
             record_stats=True,
             video_folder=work_dirs["videos_eval"],
             episode_trigger=lambda e: True,
-            use_lidar=False,
         )
 
         evaluator = AgentEvaluator(cfg.eval, run, work_dirs["videos_eval"], work_dirs["models"])
