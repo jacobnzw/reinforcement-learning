@@ -19,7 +19,7 @@ from torch.distributions import Categorical
 from tqdm import tqdm
 
 import wandb
-from configs import EnvConfig, EvalConfig, TrainConfig, TrainEvalConfig
+from configs import EnvConfig, EvalConfig, TrainConfig
 
 device = torch.accelerator.current_accelerator()
 
@@ -457,7 +457,7 @@ def make_env(
 ):
     """Make the environment."""
     env = gym.make(
-        env_cfg.env_id,
+        env_cfg.id,
         render_mode="rgb_array",
         max_episode_steps=env_cfg.max_episode_steps,
         **kwargs,
@@ -576,9 +576,9 @@ def collect_episode(agent, env, seed):
     return info
 
 
-def save_agent_with_wandb(run: wandb.Run, agent, model_name="flappybird_vpg"):
+def save_agent_with_wandb(run: wandb.Run, agent, basepath: str):
     def save_model(model, model_name_suffix: str):
-        model_path = f"{model_name}_{model_name_suffix}.pth"
+        model_path = f"{basepath}_{model_name_suffix}.pth"
         torch.save(model.state_dict(), model_path)
         run.save(model_path)
 
@@ -587,15 +587,7 @@ def save_agent_with_wandb(run: wandb.Run, agent, model_name="flappybird_vpg"):
     if hasattr(agent, "value_net"):
         save_model(agent.value_net, "value")
 
-    # Create and log wandb artifact
-    # model_artifact = wandb.Artifact(model_name, type="model")
-    # model_artifact.add_file(policy_net_path)
-    # model_artifact.add_file(value_net_path)
-    # run.log_artifact(model_artifact, type="model")
-
-    print(f"\nModel saved as wandb artifact: {model_name}")
-    print(f"RUN ID: {run.id}")
-    print(f"Full run path for loading: {run.entity}/{run.project}/{run.id}")
+    print(f"\nModel saved at: {basepath}")
 
 
 def load_model_with_wandb(

@@ -21,10 +21,11 @@ from utils import create_run_folder_structure, set_seeds
 
 
 class AgentEvaluator:
-    def __init__(self, cfg: EvalConfig, run: wandb.Run, video_root: str):
+    def __init__(self, cfg: EvalConfig, run: wandb.Run, video_root: str, model_root: str):
         self.cfg = cfg
         self.run = run
         self.video_root = Path(video_root)
+        self.model_root = Path(model_root)
         self.best_mean_reward = -np.inf
         self.best_mean_score = -np.inf
 
@@ -118,7 +119,8 @@ class AgentEvaluator:
                 print(f"New best mean reward: {reward_stats['mean']:.2f}")
                 self.best_mean_reward = reward_stats["mean"]
                 # Model file will be overwritten locally and in W&B
-                save_agent_with_wandb(self.run, agent, model_name=f"{agent.type}_best")
+                model_base = self.model_root / f"{agent.type}_best"
+                save_agent_with_wandb(self.run, agent, model_base.as_posix())
 
             return reward_stats["mean"]
 
@@ -169,10 +171,11 @@ def train(
             cfg.env,
             record_stats=True,
             video_folder=work_dirs["videos_eval"],
+            episode_trigger=lambda e: True,
             use_lidar=False,
         )
 
-        evaluator = AgentEvaluator(cfg.eval, run, work_dirs["videos_eval"])
+        evaluator = AgentEvaluator(cfg.eval, run, work_dirs["videos_eval"], work_dirs["models"])
         count_samples = 0
         for i_episode in tqdm(range(cfg.train.n_episodes), desc="Training", unit="ep"):
             # Collect experience over one episode
@@ -204,7 +207,8 @@ def train(
         # Log summary metrics
         return_queue = env.get_wrapper_attr("return_queue")
         run.log({f"max_reward_last_{return_queue.maxlen}_episodes": max(return_queue)})
-        save_agent_with_wandb(run, agent, model_name=f"{cfg.env.id.lower()}-{model.value}_final")
+        model_base = Path(work_dirs["models"]) / f"{cfg.env.id.lower()}-{model.value}_final"
+        save_agent_with_wandb(run, agent, model_base.as_posix())
 
         env.close()
         eval_env.close()
