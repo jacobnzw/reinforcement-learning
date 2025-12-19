@@ -224,28 +224,6 @@ def create_run_folder_structure(run: wandb.Run) -> dict[str, str]:
     return {k: str(v) for k, v in folders.items()}
 
 
-# TODO: likely not needed w/ wandb
-def log_config_to_wandb(config):
-    """Log config to wandb."""
-
-    IGNORE_KEYS = ["env", "seed_fixed", "log_every", "record_every"]
-
-    # Log the full set of hyperparameters
-    config_dict = {}
-    for field in fields(config):
-        if field.name not in IGNORE_KEYS:
-            config_dict[field.name] = getattr(config, field.name)
-
-    for field in fields(config.env):
-        if field.name not in ("env_id"):
-            config_dict[f"env/{field.name}"] = getattr(config.env, field.name)
-
-    wandb.config.update(config_dict)
-
-    # Log the rest as tags
-    wandb.config.update({"seed_fixed": config.seed_fixed, "env_id": config.env.env_id})
-
-
 # Mathematical utilities
 def set_seeds(seed):
     """Set seeds for reproducibility."""
