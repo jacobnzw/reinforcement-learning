@@ -12,14 +12,16 @@ import tyro
 
 import wandb
 from agents import AgentType, make_env
-from configs import EvalConfig
+from configs import EvalConfig, EnvConfig
 from utils import boxplot_episode_rewards, set_seeds
 
 
 def eval(
     cfg: EvalConfig,
+    cfg_env: EnvConfig,
     run_id: str,
     model: AgentType = AgentType.VPG,
+    model_basename: str = "vpg_best",
     no_record: bool = False,
 ):
     """Evaluate the policy.
@@ -41,11 +43,11 @@ def eval(
             f"Could not find run '{run_id}'. Make sure it's in format 'entity/project/run_id'. Error: {e}"
         )
 
-    agent = model.agent_class(cfg, train_run, eval_mode=True)
+    agent = model.agent_class(cfg, cfg_env, train_run, model_basename, eval_mode=True)
     print(f"Evaluating {model.value.upper()} policy...")
 
     env = make_env(
-        cfg.env,
+        cfg_env,
         record_stats=True,
         video_folder="videos/eval" if not no_record else None,
         episode_trigger=lambda e: True,
@@ -58,7 +60,7 @@ def eval(
         project=f"{model.default_model_name}",
         name=f"eval_{model.value}",
         job_type="eval",
-        config=asdict(cfg),
+        config=asdict(cfg) | asdict(cfg_env),
     ) as run:
         print(f"Evaluating model from run: {run_id}")
         print(f"Evaluation run ID: {wandb.run.id}")

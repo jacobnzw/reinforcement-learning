@@ -19,7 +19,7 @@ from torch.distributions import Categorical
 from tqdm import tqdm
 
 import wandb
-from configs import EnvConfig
+from configs import EnvConfig, EvalConfig, TrainConfig
 
 device = torch.accelerator.current_accelerator()
 
@@ -131,11 +131,6 @@ class AgentType(StrEnum):
         }[self]
 
     @property
-    def default_model_name(self) -> str:
-        """Get default model name for MLflow."""
-        return f"flappybird_{self.value}"
-
-    @property
     def description(self) -> str:
         """Get agent description."""
         return {
@@ -145,16 +140,19 @@ class AgentType(StrEnum):
 
 
 class ReinforceAgent:
-    def __init__(self, cfg, train_run=None, eval_mode=False):
+    def __init__(
+        self, cfg: TrainConfig | EvalConfig, cfg_env: EnvConfig, train_run=None, eval_mode=False
+    ):
+        self.type = AgentType.REINFORCE
+        self.cfg = cfg
+        self.cfg_env = cfg_env
         if eval_mode:
             if train_run is None:
                 raise ValueError("Train run must be specified in eval mode")
-            self.cfg = cfg
             self.policy_net = load_model_with_wandb(
                 train_run, model_name="flappybird_reinforce_policy", device=device
             )
         else:
-            self.cfg = cfg
             self.batching = cfg.batch_size is not None and cfg.batch_size > 1
             self.grad_clipping = cfg.max_grad_norm is not None and cfg.max_grad_norm > 0.0
 
@@ -183,7 +181,7 @@ class ReinforceAgent:
         """Select an action given the state."""
 
         # when frame stacking, state[0] stores game states as a LazyFrame instance
-        if self.cfg.env.frame_stack > 1:
+        if self.cfg_env.frame_stack > 1:
             state = state[0][:].reshape(-1)
 
         state = torch.from_numpy(state).float().unsqueeze(0).to(device)
@@ -274,19 +272,27 @@ class VanillaPolicyGradientAgent:
     REINFORCE with learned value function baseline.
     """
 
-    def __init__(self, cfg, train_run=None, eval_mode=False):
+    def __init__(
+        self,
+        cfg: TrainConfig | EvalConfig,
+        cfg_env: EnvConfig,
+        train_run=None,
+        model_basename: str | None = None,
+        eval_mode=False,
+    ):
+        self.type = AgentType.VPG
+        self.cfg = cfg
+        self.cfg_env = cfg_env
         if eval_mode:
             if train_run is None:
                 raise ValueError("Train run must be specified in eval mode")
-            self.cfg = cfg
             self.policy_net = load_model_with_wandb(
-                train_run, model_name="flappybird_vpg_policy", device=device
+                train_run, model_name=f"{model_basename}_policy", device=device
             )
             self.value_net = load_model_with_wandb(
-                train_run, model_name="flappybird_vpg_value", device=device
+                train_run, model_name=f"{model_basename}_value", device=device
             )
         else:
-            self.cfg = cfg
             self.batching = cfg.batch_size is not None and cfg.batch_size > 1
             self.grad_clipping = cfg.max_grad_norm is not None and cfg.max_grad_norm > 0.0
 
@@ -327,7 +333,7 @@ class VanillaPolicyGradientAgent:
         """Select an action given the state."""
 
         # when frame stacking, state[0] stores game states as a LazyFrame instance
-        if self.cfg.env.frame_stack > 1:
+        if self.cfg_env.frame_stack > 1:
             state = state[0][:].reshape(-1)
 
         state = torch.from_numpy(state).float().unsqueeze(0).to(device)
@@ -408,12 +414,12 @@ class VanillaPolicyGradientAgent:
     def print_update_status(self, result: dict, i_episode: int):
         if not self.is_header_printed:
             tqdm.write(
-                f"{'Episode':>8s} | {'Reward':>8s} | {'Loss (P)':>8s} | {'Loss (V)':>8s} | "
+                f"{'Episode':>8s} | {'Samples':>8s} | {'Reward':>8s} | {'Loss (P)':>8s} | {'Loss (V)':>8s} | "
                 f"{'Entropy':>9s} | {'LR':>8s}"
             )
             self.is_header_printed = True
         tqdm.write(
-            f"{i_episode + 1:> 8d} | {self.summed_reward:> 8.1f} | "
+            f"{i_episode + 1:> 8d} | {result['count_samples']:> 8d} | {self.summed_reward:> 8.1f} | "
             f"{result['policy/loss']:> 8.2f} | {result['value/loss']:> 8.2f} | "
             f"{result['policy/entropy']:> .2e} | {result['policy/learning_rate']:> .2e}"
         )
@@ -451,7 +457,7 @@ def make_env(
 ):
     """Make the environment."""
     env = gym.make(
-        env_cfg.env_id,
+        env_cfg.id,
         render_mode="rgb_array",
         max_episode_steps=env_cfg.max_episode_steps,
         **kwargs,
@@ -570,10 +576,10 @@ def collect_episode(agent, env, seed):
     return info
 
 
-def save_agent_with_wandb(run: wandb.Run, agent, model_name="flappybird_vpg"):
+def save_agent_with_wandb(run: wandb.Run, agent, basepath: str):
     def save_model(model, model_name_suffix: str):
-        model_path = f"{model_name}_{model_name_suffix}.pth"
-        torch.save(model.cpu().state_dict(), model_path)
+        model_path = f"{basepath}_{model_name_suffix}.pth"
+        torch.save(model.state_dict(), model_path)
         run.save(model_path)
 
     # Save model locally first
@@ -581,15 +587,7 @@ def save_agent_with_wandb(run: wandb.Run, agent, model_name="flappybird_vpg"):
     if hasattr(agent, "value_net"):
         save_model(agent.value_net, "value")
 
-    # Create and log wandb artifact
-    # model_artifact = wandb.Artifact(model_name, type="model")
-    # model_artifact.add_file(policy_net_path)
-    # model_artifact.add_file(value_net_path)
-    # run.log_artifact(model_artifact, type="model")
-
-    print(f"\nModel saved as wandb artifact: {model_name}")
-    print(f"RUN ID: {run.id}")
-    print(f"Full run path for loading: {run.entity}/{run.project}/{run.id}")
+    print(f"\nModel saved at: {basepath}")
 
 
 def load_model_with_wandb(
@@ -637,17 +635,24 @@ def load_model_with_wandb(
     config = train_run.config
 
     # Create the appropriate model based on the model name and load the state dict
+    def get_train_cfg_key(key: str, config: dict):
+        if key in config:
+            return config[key]
+        if "train" in config and key in config["train"]:
+            return config["train"][key]
+        return None
+
     if "policy" in model_name:
-        hidden_dim = config.get("hidden_dim", (128, 128))
+        hidden_dim = get_train_cfg_key("hidden_dim", config)
         model = FlappyBirdStatePolicy(hidden_dim=hidden_dim).to(device)
         model.load_state_dict(state_dict)
     elif "value" in model_name:
-        vf_hidden_dim = config.get("vf_hidden_dim", (128, 128))
+        vf_hidden_dim = get_train_cfg_key("vf_hidden_dim", config)
         model = FlappyBirdStateValue(hidden_dim=vf_hidden_dim).to(device)
         model.load_state_dict(state_dict)
     else:
         # Default case for backward compatibility - assume it's a policy model
-        hidden_dim = config.get("hidden_dim", (128, 128))
+        hidden_dim = get_train_cfg_key("hidden_dim", config)
         model = FlappyBirdStatePolicy(hidden_dim=hidden_dim).to(device)
         model.load_state_dict(state_dict)
 
