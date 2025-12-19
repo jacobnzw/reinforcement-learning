@@ -3,6 +3,24 @@ Reinforcement Learning Experiments
 
 This repository contains my experiments with reinforcement learning algorithms. The main focus is on training agents to play Flappy Bird using outdated policy gradient algorithms and PPO.
 
+## Codebase
+
+```shell
+uv sync
+
+# Should install dependencies and print help message 
+uv run flappybird/train_eval.py --help
+```
+
+The codebase is organized as follows:
+
+- `flappybird/`
+  - `train_eval.py`: training and w/ "online" evaluation
+  - `train.py`: training script
+  - `eval.py`: evaluation script
+  - `agents.py`: RL agents and policy networks
+  - `configs.py`: configuration dataclasses
+  - `utils.py`: utility functions
 
 ## Algorithms
 Implementations are just for practicing PyTorch and learning about basic concepts of RL.
@@ -43,17 +61,20 @@ PPO works with increased exploration via entropy coefficient.
 I use `FlappyBird-v0` as an example of a sparse reward environment and 
 `InvertedPendulum-v4` as an example of a dense reward environment.
 
-REINFORCE and VPG work on `InvertedPendulum-v4` (dense rewards), but fail on `FlappyBird-v0` (sparse rewards).
-This can be seen from the perpetually rising and collapsing reward curve on `FlappyBird-v0`, 
-which exhibits no growth trend compared to `InvertedPendulum-v4`, where the growth trend is apparent, albeit very noisy.
+REINFORCE works on `InvertedPendulum-v4` (dense rewards). The reward growth trend is apparent, albeit very noisy.
+
+![REINFORCE Pendulum Reward Curve](assets/reward-reinforce-pendulum.png)
+
+[🎦 Learned REINFORCE policy for InvertedPendulum-v4](assets/reinforce-pendulum-eval-episode-14.mp4)
+
+I tried training a policy on `FlappyBird-v0` with REINFORCE as well as VPG. 
+In practical terms, there is hardly any difference between the two. 
+Adding a value function baseline in the VPG makes no fundamental difference in this case.
+
+This can be seen in the perpetually rising and collapsing raw reward curve (faint red) over the course of 20_000 training episodes on `FlappyBird-v0`, which exhibits no growth trend (red). 
 The reward peaks get higher over time but can't be sustained.
-Adding a value function baseline, as in the VPG, doesn't help much at all.
 
-![VPG Flappybird Reward Curve](flappybird/assets/reward-vpg-flappybird.png)
-
-![REINFORCE Pendulum Reward Curve](flappybird/assets/reward-reinforce-pendulum.png)
-
-[🎦 Learned REINFORCE policy for InvertedPendulum-v4](flappybird/assets/reinforce-pendulum-eval-episode-14.mp4)
+![VPG Flappybird Reward Curve](assets/reward-vpg-flappybird.png)
 
 ### VPG: Normalized vs Un-Normalized Sparse Rewards
 One way to deal with sparse rewards is to normalize them (together with observations), which I do via
