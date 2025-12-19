@@ -7,15 +7,16 @@ dependencies = [
     "gymnasium[mujoco]>=0.29.1",
     "huggingface-sb3>=3.0",
     "marimo>=0.18.3",
-    "mlflow>=3.6.0",
     "moviepy>=2.2.1",
     "opencv-python>=4.8.1.78",
     "rich>=14.2.0",
+    "richer>=0.1.6",
     "seaborn>=0.13.2",
     "stable-baselines3[extra]>=2.7.0",
     "torch>=2.9.0",
     "tqdm>=4.67.1",
     "tyro>=0.9.35",
+    "wandb>=0.23.1",
 ]
 
 [project.optional-dependencies]

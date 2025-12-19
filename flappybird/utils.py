@@ -14,10 +14,10 @@ from pathlib import Path
 
 import imageio
 import matplotlib.pyplot as plt
-import mlflow
 import numpy as np
 import seaborn as sns
 import torch
+import wandb
 from huggingface_hub import HfApi, login
 from huggingface_hub.repocard import metadata_eval_result, metadata_save
 
@@ -195,23 +195,26 @@ def push_to_hub(repo_id, env_id, model, hyperparameters, eval_env, video_fps=30)
 
 
 # MLflow utilities
-def log_config_to_mlflow(config):
-    """Log config to MLflow."""
+# TODO: likely not needed w/ wandb
+def log_config_to_wandb(config):
+    """Log config to wandb."""
 
     IGNORE_KEYS = ["env", "seed_fixed", "log_every", "record_every"]
 
     # Log the full set of hyperparameters
+    config_dict = {}
     for field in fields(config):
         if field.name not in IGNORE_KEYS:
-            mlflow.log_param(field.name, getattr(config, field.name))
+            config_dict[field.name] = getattr(config, field.name)
 
     for field in fields(config.env):
         if field.name not in ("env_id"):
-            mlflow.log_param(f"env/{field.name}", getattr(config.env, field.name))
+            config_dict[f"env/{field.name}"] = getattr(config.env, field.name)
 
-    # Log the rest as descriptive tags
-    mlflow.set_tag("seed_fixed", config.seed_fixed)
-    mlflow.set_tag("env_id", config.env.env_id)
+    wandb.config.update(config_dict)
+
+    # Log the rest as tags
+    wandb.config.update({"seed_fixed": config.seed_fixed, "env_id": config.env.env_id})
 
 
 # Mathematical utilities
