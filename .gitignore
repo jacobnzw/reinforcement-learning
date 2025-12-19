@@ -137,13 +137,13 @@ wandb/
 mlruns/
 
 # Video files
-*.mp4
+# *.mp4
 *.avi
 *.mov
 *.mkv
 
 # Image files
-*.png
+# *.png
 *.jpg
 *.jpeg
 *.gif

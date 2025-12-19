@@ -30,33 +30,71 @@ The **action** space is discrete, with 2 actions:
 
 The **reward** structure is sparse:
  - `+1.0` for passing a pipe
- - `-1.0` for death
  - `+0.1` for each frame alive (to encourage longer lives)
+ - `-1.0` for death
  - `-0.5` for reaching top of screen (to penalize flying too high)
 
 
 ## Experiments
-REINFORCE is fucking hopeless for sparse rewards. Adding a value function baseline in VPG doesn't help much at all. PPO works with increased exploration via entropy coefficient.
+PPO works with increased exploration via entropy coefficient.
+
 
 ### VPG: Sparse vs Dense Rewards
-VPG works on InvertedPendulum with dense rewards, but fails on FlappyBird-v0 with sparse rewards.
+I use `FlappyBird-v0` as an example of a sparse reward environment and 
+`InvertedPendulum-v4` as an example of a dense reward environment.
+
+REINFORCE and VPG work on `InvertedPendulum-v4` (dense rewards), but fail on `FlappyBird-v0` (sparse rewards).
+This can be seen from the perpetually rising and collapsing reward curve on `FlappyBird-v0`, 
+which exhibits no growth trend compared to `InvertedPendulum-v4`, where the growth trend is apparent, albeit very noisy.
+The reward peaks get higher over time but can't be sustained.
+Adding a value function baseline, as in the VPG, doesn't help much at all.
+
+🚧 TODO: compare reward curves from inverted pendulum and flappybird
+
+<!-- Note: GitHub doesn't support direct video embedding in README.md from repository files.
+     To embed a video, you need to:
+     1. Upload the video as an asset in a GitHub issue or PR comment
+     2. Copy the generated URL (format: https://github.com/user-attachments/assets/...)
+     3. Paste it here as a raw URL or use HTML:
+     
+     <video src="https://github.com/user-attachments/assets/your-video-id-here" controls></video>
+     
+     Alternatively, you can:
+     - Link to the video file: [Watch evaluation video](flappybird/assets/reinforce-pendulum-eval-episode-14.mp4)
+     - Upload to YouTube/Vimeo and embed
+     - Use GitHub Pages to host and embed
+-->
+
+![REINFORCE Pendulum Reward Curve](flappybird/assets/reward-reinforce-pendulum.png)
+
+[🎦 Learned REINFORCE policy for InvertedPendulum-v4](flappybird/assets/reinforce-pendulum-eval-episode-14.mp4)
 
 ### VPG: Normalized vs Un-Normalized Sparse Rewards
-Compare normalized vs un-normalized rewards on FlappyBird-v0.
+One way to deal with sparse rewards is to normalize them (together with observations), which I do via
+`gym.wrappers.NormalizeReward` and `gym.wrappers.NormalizeObservation`.
+
+🚧 TODO: compare reward curves from normalized and un-normalized sparse rewards on `FlappyBird-v0`.
 
 ### Sample Efficiency: PPO vs VPG
-PPO is way more sample efficient than VPG.
+A simple way to comapare various RL training procedures is to simply ask how many environment interactions
+does it take to learn a successful policy.
+PPO needs way less environment interactions to learn successfull policy than VPG (or REINFORCE). 
+In RL speak, it is said to be more sample efficient than VPG.
 
 | Algo | Reward / 1K Samples | 
 |------|---------------------|
 | PPO  | Fill                |
 | VPG  | Fill                |
 
+🚧 TODO: compare reward gains relative to number of samples
 
 ## Possible Improvements
-RL is CPU-bound due to the environment interactions. Therefore, the following improvements are possible:
-- Use vectorized environments for training
-- Use [Generalized Advantage Estimation (GAE)](https://shivang-ahd.medium.com/generalized-advantage-estimation-a-deep-dive-into-bias-variance-and-policy-gradients-a5e0b3454dad)
+RL is CPU-bound due to the environment interactions so the better we can utilize more cores the better. 
+This can be helped by the use *vectorized environments* for training.
+
+Another standard technique for controlling the bias-variance tradeoff is 
+[Generalized Advantage Estimation (GAE)](https://shivang-ahd.medium.com/generalized-advantage-estimation-a-deep-dive-into-bias-variance-and-policy-gradients-a5e0b3454dad), 
+which essentially provides better estimates of the advantage function in the policy gradient update.
 
 ## Misc
 The RL theory takes some time setting up. [Gonkee's The FASTEST Introduction to Reinforcement Learning](https://youtu.be/VnpRp7ZglfA?si=02KyDUDj2Gi4Qeds) is a great introductory bird's eye view perspective on the whole field, which my [quick notes](RL_NOTES.md) are based on.
