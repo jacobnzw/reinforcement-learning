@@ -49,21 +49,7 @@ which exhibits no growth trend compared to `InvertedPendulum-v4`, where the grow
 The reward peaks get higher over time but can't be sustained.
 Adding a value function baseline, as in the VPG, doesn't help much at all.
 
-🚧 TODO: compare reward curves from inverted pendulum and flappybird
-
-<!-- Note: GitHub doesn't support direct video embedding in README.md from repository files.
-     To embed a video, you need to:
-     1. Upload the video as an asset in a GitHub issue or PR comment
-     2. Copy the generated URL (format: https://github.com/user-attachments/assets/...)
-     3. Paste it here as a raw URL or use HTML:
-     
-     <video src="https://github.com/user-attachments/assets/your-video-id-here" controls></video>
-     
-     Alternatively, you can:
-     - Link to the video file: [Watch evaluation video](flappybird/assets/reinforce-pendulum-eval-episode-14.mp4)
-     - Upload to YouTube/Vimeo and embed
-     - Use GitHub Pages to host and embed
--->
+![VPG Flappybird Reward Curve](flappybird/assets/reward-vpg-flappybird.png)
 
 ![REINFORCE Pendulum Reward Curve](flappybird/assets/reward-reinforce-pendulum.png)
 
@@ -76,7 +62,7 @@ One way to deal with sparse rewards is to normalize them (together with observat
 🚧 TODO: compare reward curves from normalized and un-normalized sparse rewards on `FlappyBird-v0`.
 
 ### Sample Efficiency: PPO vs VPG
-A simple way to comapare various RL training procedures is to simply ask how many environment interactions
+A simple way to compare various RL training procedures is to simply ask how many environment interactions
 does it take to learn a successful policy.
 PPO needs way less environment interactions to learn successfull policy than VPG (or REINFORCE). 
 In RL speak, it is said to be more sample efficient than VPG.
