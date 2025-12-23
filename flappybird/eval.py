@@ -21,6 +21,7 @@ def eval(
     cfg_env: EnvConfig,
     run_id: str,
     model: AgentType = AgentType.VPG,
+    project: str = "flappybird-v0-vpg",
     model_basename: str = "vpg_best",
     no_record: bool = False,
 ):
@@ -37,7 +38,8 @@ def eval(
     # Get the training run using the API
     api = wandb.Api()
     try:
-        train_run = api.run(f"{ENTITY}/{model_basename}/{run_id}")
+        # run_data / run-20251223_103822-x9ov235o / models
+        train_run = api.run(f"{ENTITY}/{project}/{run_id}")
     except Exception as e:
         raise ValueError(
             f"Could not find run '{run_id}'. Make sure it's in format 'entity/project/run_id'. Error: {e}"
@@ -53,6 +55,7 @@ def eval(
         episode_trigger=lambda e: True,
         use_lidar=False,
     )
+    # --run-id 3ykbvncj --model-basename run_data/run-20251222_091906-3ykbvncj/models/vpg_best
     env.set_wrapper_attr("update_running_mean", False)
 
     # Initialize wandb for evaluation

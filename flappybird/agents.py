@@ -596,9 +596,7 @@ def save_agent_with_wandb(run: wandb.Run, agent, model_root: str):
     print(f"\nModel saved at: {model_root}")
 
 
-def load_model_with_wandb(
-    train_run: wandb.Run, model_name="flappybird_reinforce_policy", device=None
-):
+def load_model_with_wandb(train_run: wandb.Run, model_name="vpg_best_policy", device=None):
     """Load model from wandb using wandb.restore().
 
     Args:
@@ -614,14 +612,8 @@ def load_model_with_wandb(
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Extract run_id and project from the run object
-    run_id = train_run.id
-    project = train_run.project
-
-    # Construct the run path for wandb.restore()
-    run_path = f"{ENTITY}/{project}/{run_id}"
-
-    # Restore the model file using wandb.restore()
+    # Restore the model file
+    run_path = Path("").joinpath(*train_run.path)
     model_filename = f"{model_name}.pth"
     try:
         restored_file = wandb.restore(model_filename, run_path=run_path)
