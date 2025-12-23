@@ -87,7 +87,9 @@ The reward peaks get higher over time but can't be sustained.
 One way to deal with sparse rewards is to normalize them (together with observations), which I do via
 `gym.wrappers.NormalizeReward` and `gym.wrappers.NormalizeObservation`.
 
-🚧 TODO: compare reward curves from normalized and un-normalized sparse rewards on `FlappyBird-v0`.
+Comparison of reward curves from normalized and un-normalized sparse rewards on `FlappyBird-v0` (seed fixed for both throughout the whole training).
+
+![VPG Flappybird Reward Curve](assets/reward-vpg-flappybird-seed-fixed-un-normed-comparison.png)
 
 🚧 TODO: link to W&B dashboard
 
