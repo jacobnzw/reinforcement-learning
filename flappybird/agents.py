@@ -7,6 +7,7 @@ agents to play FlappyBird.
 from collections import deque
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Callable
 
 import flappy_bird_gymnasium  # noqa: F401
@@ -22,6 +23,9 @@ import wandb
 from configs import EnvConfig, EvalConfig, TrainConfig
 
 device = torch.accelerator.current_accelerator()
+
+# Fixed entity for this project
+ENTITY = "jacobnzw-n-a"
 
 
 def make_mlp(input_dim, hidden_dims, output_dim):
@@ -575,18 +579,21 @@ def collect_episode(agent, env, seed):
     return info
 
 
-def save_agent_with_wandb(run: wandb.Run, agent, basepath: str):
-    def save_model(model, model_name_suffix: str):
-        model_path = f"{basepath}_{model_name_suffix}.pth"
+def save_agent_with_wandb(run: wandb.Run, agent, model_root: str):
+    # Model file will be overwritten locally and in W&B
+    model_base = Path(model_root) / f"{agent.type}_best"
+
+    def save_model(model, net_name: str):
+        model_path = f"{model_base}_{net_name}.pth"
         torch.save(model.state_dict(), model_path)
-        run.save(model_path)
+        run.save(model_path, base_path=model_root)
 
     # Save model locally first
     save_model(agent.policy_net, "policy")
     if hasattr(agent, "value_net"):
         save_model(agent.value_net, "value")
 
-    print(f"\nModel saved at: {basepath}")
+    print(f"\nModel saved at: {model_root}")
 
 
 def load_model_with_wandb(
@@ -606,9 +613,6 @@ def load_model_with_wandb(
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Fixed entity for this project
-    ENTITY = "jacobnzw-n-a"
 
     # Extract run_id and project from the run object
     run_id = train_run.id

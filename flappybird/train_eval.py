@@ -118,9 +118,7 @@ class AgentEvaluator:
             if reward_stats["mean"] > self.best_mean_reward:
                 print(f"New best mean reward: {reward_stats['mean']:.2f}")
                 self.best_mean_reward = reward_stats["mean"]
-                # Model file will be overwritten locally and in W&B
-                model_base = self.model_root / f"{agent.type}_best"
-                save_agent_with_wandb(self.run, agent, model_base.as_posix())
+                save_agent_with_wandb(self.run, agent, self.model_root)
 
             return reward_stats["mean"]
 

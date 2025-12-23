@@ -11,8 +11,8 @@ import torch
 import tyro
 
 import wandb
-from agents import AgentType, make_env
-from configs import EvalConfig, EnvConfig
+from agents import AgentType, make_env, ENTITY
+from configs import EnvConfig, EvalConfig
 from utils import boxplot_episode_rewards, set_seeds
 
 
@@ -37,7 +37,7 @@ def eval(
     # Get the training run using the API
     api = wandb.Api()
     try:
-        train_run = api.run(f"jacobnzw-n-a/{model.default_model_name}/{run_id}")
+        train_run = api.run(f"{ENTITY}/{model_basename}/{run_id}")
     except Exception as e:
         raise ValueError(
             f"Could not find run '{run_id}'. Make sure it's in format 'entity/project/run_id'. Error: {e}"
@@ -63,8 +63,8 @@ def eval(
         config=asdict(cfg) | asdict(cfg_env),
     ) as run:
         print(f"Evaluating model from run: {run_id}")
-        print(f"Evaluation run ID: {wandb.run.id}")
-        print(f"Full evaluation run path: {wandb.run.entity}/{wandb.run.project}/{wandb.run.id}\n")
+        print(f"Evaluation run ID: {run.id}")
+        print(f"Full evaluation run path: {run.entity}/{run.project}/{run.id}\n")
 
         with torch.no_grad():
             episode_rewards = []
