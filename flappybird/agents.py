@@ -25,6 +25,7 @@ from configs import EnvConfig, EvalConfig, TrainConfig
 device = torch.accelerator.current_accelerator()
 
 # Fixed entity for this project
+# TODO: create AgentWandbHandler class to manage agent saving/loading
 ENTITY = "jacobnzw-n-a"
 
 
@@ -276,6 +277,7 @@ class VanillaPolicyGradientAgent:
     REINFORCE with learned value function baseline.
     """
 
+    # TODO: initialize w/ policy and value nets from artifact; drop: train_run, model_basename
     def __init__(
         self,
         cfg: TrainConfig | EvalConfig,
@@ -581,27 +583,30 @@ def collect_episode(agent, env, seed):
 
 def save_agent_with_wandb(run: wandb.Run, agent, model_root: str):
     # Model file will be overwritten locally and in W&B
-    model_base = Path(model_root) / f"{agent.type}_best"
+    model_base = Path(model_root) / f"{agent.type}"
 
-    def save_model(model, net_name: str):
+    def save_model_to_artifact(artifact: wandb.Artifact, model, net_name: str):
         model_path = f"{model_base}_{net_name}.pth"
         torch.save(model.state_dict(), model_path)
-        run.save(model_path, base_path=model_root)
+        artifact.add_file(model_path)
 
-    # Save model locally first
-    save_model(agent.policy_net, "policy")
+    # Create model artifact, save policy and value networks locally, add to artifact, and log
+    model_artifact = wandb.Artifact(
+        f"{agent.type}_agent", type="model", metadata=run.config, description=""
+    )
+    save_model_to_artifact(model_artifact, agent.policy_net, "policy")
     if hasattr(agent, "value_net"):
-        save_model(agent.value_net, "value")
+        save_model_to_artifact(model_artifact, agent.value_net, "value")
+    run.log_artifact(model_artifact)
 
     print(f"\nModel saved at: {model_root}")
 
 
-def load_model_with_wandb(train_run: wandb.Run, model_name="vpg_best_policy", device=None):
-    """Load model from wandb using wandb.restore().
+def load_agent_with_wandb(artifact_name: str, run: wandb.Run, agent_type: AgentType, device=None):
+    """Load agent from wandb artifact.
 
     Args:
-        train_run (wandb.Run or wandb.Api.Run): W&B run object from which to load the model.
-            Can be obtained via wandb.Api().run("entity/project/run_id")
+        run (wandb.Run or wandb.Api.Run): W&B run object from which to load the model.
         model_name (str): Name of the model file to load (e.g., "flappybird_vpg_policy",
             "flappybird_vpg_value", "flappybird_reinforce_policy")
         device: PyTorch device to load the model on
@@ -612,44 +617,27 @@ def load_model_with_wandb(train_run: wandb.Run, model_name="vpg_best_policy", de
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Restore the model file
-    run_path = Path("").joinpath(*train_run.path)
-    model_filename = f"{model_name}.pth"
-    try:
-        restored_file = wandb.restore(model_filename, run_path=run_path)
-        model_path = restored_file.name
-    except Exception as e:
-        raise ValueError(
-            f"Could not restore model file '{model_filename}' from run {run_path}. Error: {e}"
+    model_artifact = run.use_artifact(artifact_name)
+    model_dir = model_artifact.download()
+
+    # Load policy network
+    # TODO: parametrize _policy, _value filename postfixes via StrEnum
+    policy_state = torch.load(
+        f"{model_dir}/{agent_type.value.lower()}_policy.pth", map_location=device
+    )
+    hidden_dim = model_artifact.metadata["train"]["hidden_dim"]
+    policy_net = FlappyBirdStatePolicy(hidden_dim=hidden_dim).to(device)
+    policy_net.load_state_dict(policy_state)
+    # Load value network, if loading VPG
+    if agent_type == AgentType.VPG:
+        vf_hidden_dim = model_artifact.metadata["train"]["vf_hidden_dim"]
+        value_state = torch.load(
+            f"{model_dir}/{agent_type.value.lower()}_value.pth", map_location=device
         )
+        value_net = FlappyBirdStateValue(hidden_dim=vf_hidden_dim).to(device)
+        value_net.load_state_dict(value_state)
+        agent = agent_type.agent_class(policy_net=policy_net, value_net=value_net)
+    else:  # REINFORCE only other option
+        agent = agent_type.agent_class(policy_net=policy_net)
 
-    # Load model state dict
-    state_dict = torch.load(model_path, map_location=device)
-
-    # Get config from the run to create model with correct architecture
-    config = train_run.config
-
-    # Create the appropriate model based on the model name and load the state dict
-    def get_train_cfg_key(key: str, config: dict):
-        if key in config:
-            return config[key]
-        if "train" in config and key in config["train"]:
-            return config["train"][key]
-        return None
-
-    if "policy" in model_name:
-        hidden_dim = get_train_cfg_key("hidden_dim", config)
-        model = FlappyBirdStatePolicy(hidden_dim=hidden_dim).to(device)
-        model.load_state_dict(state_dict)
-    elif "value" in model_name:
-        vf_hidden_dim = get_train_cfg_key("vf_hidden_dim", config)
-        model = FlappyBirdStateValue(hidden_dim=vf_hidden_dim).to(device)
-        model.load_state_dict(state_dict)
-    else:
-        # Default case for backward compatibility - assume it's a policy model
-        hidden_dim = get_train_cfg_key("hidden_dim", config)
-        model = FlappyBirdStatePolicy(hidden_dim=hidden_dim).to(device)
-        model.load_state_dict(state_dict)
-
-    print(f"Loaded model '{model_name}' from wandb run: {run_path}")
-    return model
+    return agent

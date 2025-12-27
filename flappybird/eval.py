@@ -11,11 +11,12 @@ import torch
 import tyro
 
 import wandb
-from agents import AgentType, make_env, ENTITY
+from agents import ENTITY, AgentType, make_env
 from configs import EnvConfig, EvalConfig
 from utils import boxplot_episode_rewards, set_seeds
 
 
+# TODO: rework to evaluate W&B model artifacts instead of training runs
 def eval(
     cfg: EvalConfig,
     cfg_env: EnvConfig,
@@ -36,6 +37,7 @@ def eval(
     set_seeds(cfg.seed)
 
     # Get the training run using the API
+    # TODO: remove when artifacts used
     api = wandb.Api()
     try:
         # run_data / run-20251223_103822-x9ov235o / models

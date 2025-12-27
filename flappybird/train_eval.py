@@ -118,6 +118,7 @@ class AgentEvaluator:
             if reward_stats["mean"] > self.best_mean_reward:
                 print(f"New best mean reward: {reward_stats['mean']:.2f}")
                 self.best_mean_reward = reward_stats["mean"]
+                # TODO: should we save the env w/ running stats as well?
                 save_agent_with_wandb(self.run, agent, self.model_root)
 
             return reward_stats["mean"]
