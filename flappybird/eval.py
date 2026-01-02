@@ -45,14 +45,13 @@ def eval(
 
         # Load agent from artifact for "offline" evaluation
         handler = AgentHandler(run, cfg)
-        agent = handler.load_agent(artifact_name, model.value)
+        agent = handler.load_agent(artifact_name, model, cfg_env)
 
         env = make_env(
             cfg_env,
             record_stats=True,
             video_folder=handler.work_dirs["videos_eval"] if not no_record else None,
             episode_trigger=lambda e: True,
-            use_lidar=False,
         )
         env.set_wrapper_attr("update_running_mean", False)
 

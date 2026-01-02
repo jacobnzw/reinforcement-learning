@@ -701,14 +701,14 @@ class AgentHandler:
             length_stats = self._array_stats(episode_lengths)
             score_stats = self._array_stats(episode_scores) if episode_scores else None
 
-            self._log_stats(reward_stats, length_stats, score_stats)
-
             # Log model if current eval better than the last
             if train_episode is not None and reward_stats["mean"] > self.best_mean_reward:
                 print(f"New best mean reward: {reward_stats['mean']:.2f}")
                 self.best_mean_reward = reward_stats["mean"]
                 # TODO: should we save the env w/ running stats as well?
                 self.save_agent(agent)
+
+            self._log_stats(reward_stats, length_stats, score_stats)
 
             # TODO: Offline eval: episode rewards for boxplot?
             return reward_stats["mean"]
@@ -734,7 +734,9 @@ class AgentHandler:
             f"logged to artifact: {model_artifact.name} ({art.state})"
         )
 
-    def load_agent(self, artifact_name: str, agent_type: AgentType, device=None):
+    def load_agent(
+        self, artifact_name: str, agent_type: AgentType, cfg_env: EnvConfig, device=None
+    ):
         """Load agent from wandb artifact.
 
         Loads policy and value nets from W&B artifact and returns an agent instance.
@@ -764,7 +766,7 @@ class AgentHandler:
 
         # Instantiate agent
         if agent_type == AgentType.REINFORCE:
-            agent = agent_type.agent_class(self.cfg_env, policy_net=policy_net, eval_mode=True)
+            agent = agent_type.agent_class(cfg_env, policy_net=policy_net, eval_mode=True)
         else:  # Load value network, if VPG
             vf_hidden_dim = model_artifact.metadata["train"]["vf_hidden_dim"]
             value_net = FlappyBirdStateValue(hidden_dim=vf_hidden_dim).to(device)
@@ -773,7 +775,7 @@ class AgentHandler:
             value_net.load_state_dict(value_state)
 
             agent = agent_type.agent_class(
-                self.cfg_env, policy_net=policy_net, value_net=value_net, eval_mode=True
+                cfg_env, policy_net=policy_net, value_net=value_net, eval_mode=True
             )
 
         return agent

@@ -35,9 +35,9 @@ def train(
     # Set up the agent
     agent = model.agent_class(cfg.env, cfg.train)
     cfg_dict = asdict(cfg)
-    cfg_dict.update({"optimizer": agent.policy_optimizer.__class__.__name__})
+    cfg_dict["train"].update({"optimizer": agent.policy_optimizer.__class__.__name__})
     with wandb.init(
-        project=f"{cfg.env.id.lower()}-{model.value}",  # f"{model.default_model_name}",
+        project=f"{cfg.env.id.lower()}-{model.value}",
         name=f"train_{model.value}",
         job_type="train_eval",
         config=cfg_dict,
