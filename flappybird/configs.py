@@ -18,7 +18,7 @@ class EnvConfig:
 
 @dataclass
 class TrainConfig:
-    """Training configuration for REINFORCE agent."""
+    """Training configuration."""
 
     # Training settings
     n_episodes: int = 5_000
