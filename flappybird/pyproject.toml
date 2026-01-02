@@ -16,7 +16,7 @@ dependencies = [
     "torch>=2.9.0",
     "tqdm>=4.67.1",
     "tyro>=0.9.35",
-    "wandb>=0.23.1",
+    "wandb==0.23.0",
 ]
 
 [project.optional-dependencies]

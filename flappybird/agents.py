@@ -727,10 +727,11 @@ class AgentHandler:
         save_model_to_artifact(model_artifact, agent.policy_net, self.POLICY_NAME)
         if hasattr(agent, "value_net"):
             save_model_to_artifact(model_artifact, agent.value_net, self.VALUE_NAME)
-        self.run.log_artifact(model_artifact, aliases=aliases)
+        art = self.run.log_artifact(model_artifact, aliases=aliases)
 
         print(
-            f"\nAgent saved locally at: {self.work_dirs['models']} logged to artifact: {model_artifact.name}"
+            f"\nAgent saved locally at: {self.work_dirs['models']} "
+            f"logged to artifact: {model_artifact.name} ({art.state})"
         )
 
     def load_agent(self, artifact_name: str, agent_type: AgentType, device=None):
