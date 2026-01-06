@@ -6,6 +6,7 @@ agents to play FlappyBird.
 
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Callable
@@ -23,9 +24,6 @@ import wandb
 from configs import EnvConfig, EvalConfig, TrainConfig
 
 device = torch.accelerator.current_accelerator()
-
-# Fixed entity for this project
-ENTITY = "jacobnzw-n-a"
 
 
 def make_mlp(input_dim, hidden_dims, output_dim):
@@ -145,22 +143,22 @@ class AgentType(StrEnum):
 
 class ReinforceAgent:
     def __init__(
-        self, cfg: TrainConfig | EvalConfig, cfg_env: EnvConfig, train_run=None, eval_mode=False
+        self,
+        cfg_env: EnvConfig,
+        cfg: TrainConfig = None,
+        policy_net: nn.Module = None,
+        eval_mode=False,
     ):
         self.type = AgentType.REINFORCE
         self.cfg = cfg
         self.cfg_env = cfg_env
         if eval_mode:
-            if train_run is None:
-                raise ValueError("Train run must be specified in eval mode")
-            self.policy_net = load_model_with_wandb(
-                train_run, model_name="flappybird_reinforce_policy", device=device
-            )
+            self.policy_net = policy_net
         else:
             self.batching = cfg.batch_size is not None and cfg.batch_size > 1
             self.grad_clipping = cfg.max_grad_norm is not None and cfg.max_grad_norm > 0.0
 
-            self.policy_net = prepare_policy_model(cfg, train_run)
+            self.policy_net = FlappyBirdStatePolicy(hidden_dim=cfg.hidden_dim).to(device)
             self.optimizer = optim.AdamW(self.policy_net.parameters(), lr=cfg.learning_rate)
             # Set up LR scheduler to decay from initial to target learning rate by the end of training
             n_scheduler_steps = (
@@ -278,25 +276,23 @@ class VanillaPolicyGradientAgent:
 
     def __init__(
         self,
-        cfg: TrainConfig | EvalConfig,
         cfg_env: EnvConfig,
-        train_run=None,
-        model_basename: str | None = None,
+        cfg: TrainConfig = None,
+        policy_net: nn.Module = None,
+        value_net: nn.Module = None,
         eval_mode=False,
     ):
         self.type = AgentType.VPG
         self.cfg = cfg
         self.cfg_env = cfg_env
         if eval_mode:
-            if train_run is None:
-                raise ValueError("Train run must be specified in eval mode")
-            self.policy_net = load_model_with_wandb(
-                train_run, model_name=f"{model_basename}_policy", device=device
-            )
-            self.value_net = load_model_with_wandb(
-                train_run, model_name=f"{model_basename}_value", device=device
-            )
+            if policy_net is None or value_net is None:
+                raise ValueError("Policy and value networks must be specified in eval mode")
+            self.policy_net = policy_net
+            self.value_net = value_net
         else:
+            if cfg is None:
+                raise ValueError("TrainConfig must be specified in train mode")
             self.batching = cfg.batch_size is not None and cfg.batch_size > 1
             self.grad_clipping = cfg.max_grad_norm is not None and cfg.max_grad_norm > 0.0
 
@@ -579,77 +575,207 @@ def collect_episode(agent, env, seed):
     return info
 
 
-def save_agent_with_wandb(run: wandb.Run, agent, model_root: str):
-    # Model file will be overwritten locally and in W&B
-    model_base = Path(model_root) / f"{agent.type}_best"
+class AgentHandler:
+    ENTITY = "jacobnzw-n-a"  # W&B entity
+    POLICY_NAME = "policy"
+    VALUE_NAME = "value"
 
-    def save_model(model, net_name: str):
-        model_path = f"{model_base}_{net_name}.pth"
-        torch.save(model.state_dict(), model_path)
-        run.save(model_path, base_path=model_root)
+    def __init__(self, run: wandb.Run, cfg: EvalConfig):
+        self.run = run
+        self.cfg = cfg
+        self.best_mean_reward = -np.inf
+        self.best_mean_score = -np.inf
+        self.work_dirs = self.create_run_folder_structure(run.id)
 
-    # Save model locally first
-    save_model(agent.policy_net, "policy")
-    if hasattr(agent, "value_net"):
-        save_model(agent.value_net, "value")
+    @staticmethod
+    def create_run_folder_structure(run_id: str) -> dict[str, str]:
+        """Create folder structure for run data.
 
-    print(f"\nModel saved at: {model_root}")
+        Args:
+            run: W&B run object
 
+        Returns:
+            Dictionary with paths to created folders
+        """
 
-def load_model_with_wandb(train_run: wandb.Run, model_name="vpg_best_policy", device=None):
-    """Load model from wandb using wandb.restore().
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_dir = Path(f"run_data/run-{timestamp}-{run_id}")
 
-    Args:
-        train_run (wandb.Run or wandb.Api.Run): W&B run object from which to load the model.
-            Can be obtained via wandb.Api().run("entity/project/run_id")
-        model_name (str): Name of the model file to load (e.g., "flappybird_vpg_policy",
-            "flappybird_vpg_value", "flappybird_reinforce_policy")
-        device: PyTorch device to load the model on
+        folders = {
+            "root": run_dir,
+            "videos_train": run_dir / "videos" / "train",
+            "videos_eval": run_dir / "videos" / "eval",
+            "models": run_dir / "models",
+        }
 
-    Returns:
-        torch.nn.Module: The loaded model with weights
-    """
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        for folder in folders.values():
+            folder.mkdir(parents=True, exist_ok=True)
 
-    # Restore the model file
-    run_path = Path("").joinpath(*train_run.path)
-    model_filename = f"{model_name}.pth"
-    try:
-        restored_file = wandb.restore(model_filename, run_path=run_path)
-        model_path = restored_file.name
-    except Exception as e:
-        raise ValueError(
-            f"Could not restore model file '{model_filename}' from run {run_path}. Error: {e}"
+        return {k: str(v) for k, v in folders.items()}
+
+    @staticmethod
+    def _array_stats(array: list):
+        return {
+            "mean": np.mean(array),
+            "std": np.std(array),
+            "min": np.min(array),
+            "max": np.max(array),
+        }
+
+    def _log_stats(self, reward_stats, length_stats, score_stats=None):
+        def _stat_line(name, stats):
+            return (
+                f"{name:8s}: {stats['mean']: >6.2f} +/- {stats['std']:6.1e}"
+                f"  ({stats['min']:6.2f} <-> {stats['max']:6.2f})"
+            )
+
+        tqdm.write(
+            f"\nEvaluation: [mean +/- std (min <-> max)]\n"
+            f"{_stat_line('Reward', reward_stats)}\n"
+            f"{_stat_line('Length', length_stats)}\n"
+            f"{_stat_line('Score', score_stats)}\n"
+            f"{'Best':8s}: {self.best_mean_reward:6.2f}\n"
+        )
+        payload = {
+            "eval/reward/mean": reward_stats["mean"],
+            "eval/reward/std": reward_stats["std"],
+            "eval/reward/min": reward_stats["min"],
+            "eval/reward/max": reward_stats["max"],
+            "eval/length/mean": length_stats["mean"],
+            "eval/length/std": length_stats["std"],
+            "eval/length/min": length_stats["min"],
+            "eval/length/max": length_stats["max"],
+        }
+        if score_stats:
+            payload.update(
+                {
+                    "eval/score/mean": score_stats["mean"],
+                    "eval/score/std": score_stats["std"],
+                    "eval/score/min": score_stats["min"],
+                    "eval/score/max": score_stats["max"],
+                }
+            )
+        self.run.log(payload)
+
+    def evaluate(self, agent, env: gym.Env, train_episode: int = None):
+        """Evaluate the agent.
+
+        Can be used to evaluate agent in "online" setting (train_episode is not None) during training,
+        or "offline" setting (train_episode is None) after training.
+
+        Args:
+            agent: Agent to evaluate
+            env: Environment to evaluate in
+            train_episode: Current training episode number. If None, assume "offline" evaluation of trained model.
+        """
+        # Create a new eval video folder for each evaluation
+        eval_video_folder = Path(self.work_dirs["videos_eval"])
+        if train_episode is not None:
+            eval_video_folder = eval_video_folder / str(train_episode)
+        eval_video_folder.mkdir(parents=True, exist_ok=True)
+        env.set_wrapper_attr("video_folder", eval_video_folder.as_posix())
+
+        with torch.no_grad():
+            episode_rewards = []
+            episode_lengths = []
+            episode_scores = []
+            for episode in range(self.cfg.n_episodes):
+                # Each episode has predictable seed for reproducible evaluation
+                # making sure policy can cope with env stochasticity
+                seed = self.cfg.seed if self.cfg.seed_fixed else self.cfg.seed + episode
+                state, _ = env.reset(seed=seed)
+                done = False
+                while not done:
+                    action = agent.act(state, deterministic=not self.cfg.stochastic)
+                    state, reward, terminated, truncated, info = env.step(action.item())
+                    done = terminated or truncated
+
+                # Extract episode statistics from info (available after episode ends)
+                if "episode" in info:
+                    episode_rewards.append(info["episode"]["r"])
+                    episode_lengths.append(info["episode"]["l"])
+                    if env.spec.id == "FlappyBird-v0":
+                        episode_scores.append(info["score"])
+
+            reward_stats = self._array_stats(episode_rewards)
+            length_stats = self._array_stats(episode_lengths)
+            score_stats = self._array_stats(episode_scores) if episode_scores else None
+
+            # Log model if current eval better than the last
+            if train_episode is not None and reward_stats["mean"] > self.best_mean_reward:
+                print(f"New best mean reward: {reward_stats['mean']:.2f}")
+                self.best_mean_reward = reward_stats["mean"]
+                # TODO: should we save the env w/ running stats as well?
+                self.save_agent(agent)
+
+            self._log_stats(reward_stats, length_stats, score_stats)
+
+            # TODO: Offline eval: episode rewards for boxplot?
+            return reward_stats["mean"]
+
+    def save_agent(self, agent, aliases: list[str] = None):
+        def save_model_to_artifact(artifact: wandb.Artifact, model: nn.Module, net_name: str):
+            model_filename = f"{agent.type}_{net_name}.pth"
+            model_path = Path(self.work_dirs["models"]) / model_filename
+            torch.save(model.state_dict(), model_path)
+            artifact.add_file(model_path, name=model_filename)
+
+        # Create model artifact, save policy and value networks locally, add to artifact, and log
+        model_artifact = wandb.Artifact(
+            f"{agent.type}_agent", type="model", metadata=self.run.config.as_dict()
+        )
+        save_model_to_artifact(model_artifact, agent.policy_net, self.POLICY_NAME)
+        if hasattr(agent, "value_net"):
+            save_model_to_artifact(model_artifact, agent.value_net, self.VALUE_NAME)
+        art = self.run.log_artifact(model_artifact, aliases=aliases)
+
+        print(
+            f"\nAgent saved locally at: {self.work_dirs['models']} "
+            f"logged to artifact: {model_artifact.name} ({art.state})"
         )
 
-    # Load model state dict
-    state_dict = torch.load(model_path, map_location=device)
+    def load_agent(
+        self, artifact_name: str, agent_type: AgentType, cfg_env: EnvConfig, device=None
+    ):
+        """Load agent from wandb artifact.
 
-    # Get config from the run to create model with correct architecture
-    config = train_run.config
+        Loads policy and value nets from W&B artifact and returns an agent instance.
 
-    # Create the appropriate model based on the model name and load the state dict
-    def get_train_cfg_key(key: str, config: dict):
-        if key in config:
-            return config[key]
-        if "train" in config and key in config["train"]:
-            return config["train"][key]
-        return None
+        Args:
+            run (wandb.Run or wandb.Api.Run): W&B run object from which to load the model.
+            artifact_name (str): Name of the artifact to load (e.g., "vpg_agent:v0")
+            agent_type (AgentType): Type of agent to load
+            device: PyTorch device to load the model on
 
-    if "policy" in model_name:
-        hidden_dim = get_train_cfg_key("hidden_dim", config)
-        model = FlappyBirdStatePolicy(hidden_dim=hidden_dim).to(device)
-        model.load_state_dict(state_dict)
-    elif "value" in model_name:
-        vf_hidden_dim = get_train_cfg_key("vf_hidden_dim", config)
-        model = FlappyBirdStateValue(hidden_dim=vf_hidden_dim).to(device)
-        model.load_state_dict(state_dict)
-    else:
-        # Default case for backward compatibility - assume it's a policy model
-        hidden_dim = get_train_cfg_key("hidden_dim", config)
-        model = FlappyBirdStatePolicy(hidden_dim=hidden_dim).to(device)
-        model.load_state_dict(state_dict)
+        Returns:
+            torch.nn.Module: The loaded model with weights
+        """
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    print(f"Loaded model '{model_name}' from wandb run: {run_path}")
-    return model
+        model_artifact = self.run.use_artifact(artifact_name, type="model")
+        model_dir = model_artifact.download(root=self.work_dirs["models"])
+        print(f"Agent artifact {artifact_name} downloaded to: {model_dir}")
+
+        # Load policy network
+        hidden_dim = model_artifact.metadata["train"]["hidden_dim"]
+        policy_net = FlappyBirdStatePolicy(hidden_dim=hidden_dim).to(device)
+        policy_path = Path(model_dir) / f"{agent_type.value.lower()}_{self.POLICY_NAME}.pth"
+        policy_state = torch.load(policy_path, map_location=device)
+        policy_net.load_state_dict(policy_state)
+
+        # Instantiate agent
+        if agent_type == AgentType.REINFORCE:
+            agent = agent_type.agent_class(cfg_env, policy_net=policy_net, eval_mode=True)
+        else:  # Load value network, if VPG
+            vf_hidden_dim = model_artifact.metadata["train"]["vf_hidden_dim"]
+            value_net = FlappyBirdStateValue(hidden_dim=vf_hidden_dim).to(device)
+            value_path = Path(model_dir) / f"{agent_type.value.lower()}_{self.VALUE_NAME}.pth"
+            value_state = torch.load(value_path, map_location=device)
+            value_net.load_state_dict(value_state)
+
+            agent = agent_type.agent_class(
+                cfg_env, policy_net=policy_net, value_net=value_net, eval_mode=True
+            )
+
+        return agent
