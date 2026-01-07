@@ -61,8 +61,12 @@ The **reward** structure is sparse:
 
 
 ## Experiments
-PPO works with increased exploration via entropy coefficient.
+I ran a [W&B sweep for VPG](https://wandb.ai/jacobnzw-n-a/reinforcement-learning-flappybird/sweeps/l3ziupxb?nw=nwuserjacobnzw) to explore the effect of reward/observation normalization and fixed vs variable seeds on the final achieved reward.
 
+```shell
+wandb sweep sweep_config.yaml
+wandb agent <sweep_id>
+```
 
 ### VPG: Sparse vs Dense Rewards
 I use `FlappyBird-v0` as an example of a sparse reward environment and 
@@ -91,13 +95,12 @@ Comparison of reward curves from normalized and un-normalized sparse rewards on 
 
 ![VPG Flappybird Reward Curve](assets/reward-vpg-flappybird-seed-fixed-un-normed-comparison.png)
 
-🚧 TODO: link to W&B dashboard
-
 Training with normalized rewards took around 6 hours:
 reward 120 = 1000 episode steps * 0.1 + 20 pipes * 1.0
-Iffy on the variable training seed 
+
 ![VPG Flappybird Reward Curve](assets/reward-vpg-flappybird-variable-seed-rew-normed.png)
 
+[🎦 Learned VPG policy for FlappyBird-v0](assets/vpg-eval-flappy.mp4)
 
 ### Sample Efficiency: PPO vs VPG
 A simple way to compare various RL training procedures is to simply ask how many environment interactions
@@ -105,20 +108,13 @@ does it take to learn a successful policy.
 It's no secret that PPO needs way less environment interactions to learn successfull policy than VPG (or REINFORCE). 
 In RL speak, it is said to be more sample efficient than VPG.
 
-In my experiments this is reflected in the following table:
-
-| Algo | Reward / 1K Samples | 
-|------|---------------------|
-| PPO  | Fill                |
-| VPG  | Fill                |
+In my experiments, roughly speaking the respetable policy is learned by PPO after ~500k samples, while VPG needs ~10M samples - an order of magnitude difference!
 
 I limited the `max_episode_steps=1000` to reasonably cap the training time of the VPG policy, since this algorithm has to wait until the episode finishes to update the policy parameters. 
-1000 steps is roughly 20 pipe passes, which is thus best we can hope for with VPG.
+1000 steps is roughly 20 pipe passes, which translates to reward around 120 (1000 * 0.1 for living + 20 * 1.0 for passing 20 pipes), which is thus the best we can hope for with VPG.
 
 PPO is able to learn superior policy with fewer environment interactions and most importantly without having to wait for the episode to finish. This makes for a shorter training time and more efficient use of collected experience (samples).
 The `stablebaselines3` implementation also uses vectorized environments to make training faster. For details see [`train_ppo.py`](flappybird/train_ppo.py).
-
-🚧 TODO: compare reward gains relative to number of samples
 
 [🎦 Learned PPO policy playing FlappyBird-v0](assets/ppo-eval-step-137765-to-step-139765.mp4) reaches over 30 pipes at a fraction of the training time / samples.
 
