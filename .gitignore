@@ -146,7 +146,7 @@ mlruns/
 # *.png
 *.jpg
 *.jpeg
-*.gif
+# *.gif
 *.bmp
 
 # Data files

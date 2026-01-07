@@ -3,6 +3,12 @@ Reinforcement Learning Experiments
 
 This repository contains my experiments with reinforcement learning algorithms. The main focus is on training agents to play Flappy Bird using outdated policy gradient algorithms and PPO.
 
+<div align="center">
+  <img src="assets/vpg-eval-flappy.gif" alt="VPG Playing Flappybird" width="250">
+  <br>
+  <em>Learned VPG policy playing FlappyBird-v0 after ~6 hours of training. (<a href="https://wandb.ai/jacobnzw-n-a/reinforcement-learning-flappybird/sweeps/l3ziupxb/runs/qa2j0mg6/overview?nw=nwuserjacobnzw">W&B run</a>) </em>
+</div>
+
 ## Codebase
 
 ```shell
@@ -72,12 +78,20 @@ wandb agent <sweep_id>
 I use `FlappyBird-v0` as an example of a sparse reward environment and 
 `InvertedPendulum-v4` as an example of a dense reward environment.
 
-REINFORCE works on `InvertedPendulum-v4` (dense rewards). The reward growth trend is apparent, albeit very noisy.
+REINFORCE works on `InvertedPendulum-v4` because it has dense rewards. The reward growth trend is apparent, albeit very noisy.
 
 ![REINFORCE Pendulum Reward Curve](assets/reward-reinforce-pendulum.png)
 
-[🎦 Learned REINFORCE policy for InvertedPendulum-v4](assets/reinforce-pendulum-eval-episode-14.mp4)
+The final learned policy is able to balance the pendulum for a long time:
 
+<div align="center">
+  <img src="assets/reinforce-pendulum-eval-episode-14.gif" alt="REINFORCE balancing pendulum" width="250">
+  <br>
+  <em>REINFORCE policy for InvertedPendulum-v4 after ~5k episodes.</em>
+</div>
+
+The `FlappyBird-v0` environment, on the other hand, has sparse rewards where the only substantial reward is given for passing a pipe. The basic policy gradient algorithms like REINFORCE and VPG are not well-suited for sparse reward environments.
+ 
 I tried training a policy on `FlappyBird-v0` with REINFORCE as well as VPG. 
 In practical terms, there is hardly any difference between the two. 
 Adding a value function baseline in the VPG makes no fundamental difference in this case.
@@ -100,8 +114,6 @@ reward 120 = 1000 episode steps * 0.1 + 20 pipes * 1.0
 
 ![VPG Flappybird Reward Curve](assets/reward-vpg-flappybird-variable-seed-rew-normed.png)
 
-[🎦 Learned VPG policy for FlappyBird-v0](assets/vpg-eval-flappy.mp4)
-
 ### Sample Efficiency: PPO vs VPG
 A simple way to compare various RL training procedures is to simply ask how many environment interactions
 does it take to learn a successful policy.
@@ -116,7 +128,11 @@ I limited the `max_episode_steps=1000` to reasonably cap the training time of th
 PPO is able to learn superior policy with fewer environment interactions and most importantly without having to wait for the episode to finish. This makes for a shorter training time and more efficient use of collected experience (samples).
 The `stablebaselines3` implementation also uses vectorized environments to make training faster. For details see [`train_ppo.py`](flappybird/train_ppo.py).
 
-[🎦 Learned PPO policy playing FlappyBird-v0](assets/ppo-eval-step-137765-to-step-139765.mp4) reaches over 30 pipes at a fraction of the training time / samples.
+<div align="center">
+  <img src="assets/ppo-eval-step-137765-to-step-139765.gif" alt="PPO Playing Flappybird" width="250">
+  <br>
+  <em>Learned PPO policy playing FlappyBird-v0 reaches over 30 pipes at a fraction of the training time / samples.</em>
+</div>
 
 
 ## Possible Improvements
