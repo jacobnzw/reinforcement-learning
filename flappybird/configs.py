@@ -21,7 +21,7 @@ class TrainConfig:
     """Training configuration."""
 
     # Training settings
-    n_episodes: int = 5_000
+    n_episodes: int = 20_000
     hidden_dim: Tuple[int, ...] | int = (128,)
     gamma: float = 0.95
     entropy_coeff: float = 0.01

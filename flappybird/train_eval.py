@@ -103,4 +103,10 @@ def train(
 
 
 if __name__ == "__main__":
-    tyro.cli(train)
+    tyro.cli(
+        train,
+        config=(  # wandb sweep friendly cli behavior
+            tyro.conf.FlagConversionOff,
+            tyro.conf.UsePythonSyntaxForLiteralCollections,
+        ),
+    )
