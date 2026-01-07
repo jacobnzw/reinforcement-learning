@@ -1,0 +1,12 @@
+program: train_eval.py
+method: grid
+metric:
+  name: eval/reward/mean
+  goal: maximize
+parameters:
+  cfg.train.seed-fixed:
+    values: [false, true]
+  cfg.env.norm-reward-gamma:
+    values: [0.0, 0.95]
+  cfg.env.norm-observations:
+    values: [false, true]
